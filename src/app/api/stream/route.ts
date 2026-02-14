@@ -4,9 +4,10 @@ import type { DashboardState, SubAgent, ActivityItem } from '@/types/dashboard';
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
-const OPENCLAW_GATEWAY = process.env.OPENCLAW_GATEWAY_URL;
-const OPENCLAW_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || '';
-const DEMO_MODE = !OPENCLAW_GATEWAY || OPENCLAW_GATEWAY === '';
+// Dashboard API server (runs on same server as OpenClaw)
+const DASHBOARD_API_URL = process.env.DASHBOARD_API_URL || '';
+const DASHBOARD_API_TOKEN = process.env.DASHBOARD_API_TOKEN || '';
+const DEMO_MODE = !DASHBOARD_API_URL || DASHBOARD_API_URL === '';
 
 // Demo data generator for when gateway isn't connected
 function generateDemoState(): DashboardState {
@@ -110,56 +111,21 @@ async function fetchStatus(): Promise<DashboardState | null> {
   }
   
   try {
-    const response = await fetch(`${OPENCLAW_GATEWAY}/api/sessions`, {
+    const response = await fetch(`${DASHBOARD_API_URL}/api/status`, {
       headers: {
-        'Authorization': `Bearer ${OPENCLAW_TOKEN}`,
+        'Authorization': `Bearer ${DASHBOARD_API_TOKEN}`,
         'Content-Type': 'application/json',
       },
       cache: 'no-store',
     });
     
-    if (!response.ok) return generateDemoState();
+    if (!response.ok) {
+      console.error('Dashboard API error:', response.status);
+      return generateDemoState();
+    }
     
     const data = await response.json();
-    const sessions = data.sessions || [];
-    const now = new Date().toISOString();
-    
-    const mainSession = sessions.find((s: Record<string, unknown>) => s.kind === 'main') || sessions[0];
-    const subAgentSessions = sessions.filter((s: Record<string, unknown>) => 
-      s.kind === 'isolated' || s.kind === 'subagent'
-    );
-    
-    return {
-      bri: {
-        status: mainSession?.state === 'running' ? 'active' : 
-                mainSession?.state === 'thinking' ? 'thinking' : 'idle',
-        currentTask: mainSession?.lastMessage?.slice(0, 100),
-        model: mainSession?.model || 'claude-opus-4-5',
-        sessionKey: mainSession?.sessionKey || 'main',
-        uptime: mainSession?.createdAt 
-          ? Math.floor((Date.now() - new Date(mainSession.createdAt).getTime()) / 1000)
-          : 0,
-        lastActivity: mainSession?.lastActivityAt || now,
-      },
-      subAgents: subAgentSessions.map((s: Record<string, unknown>) => ({
-        sessionKey: s.sessionKey as string,
-        label: s.label as string | undefined,
-        status: s.state === 'running' ? 'running' as const : 
-                s.state === 'completed' ? 'completed' as const : 
-                s.state === 'failed' ? 'failed' as const : 'idle' as const,
-        task: (s.task as string | undefined) || (s.lastMessage as string | undefined)?.slice(0, 100),
-        startedAt: (s.createdAt as string) || now,
-        completedAt: s.completedAt as string | undefined,
-        model: s.model as string | undefined,
-      })),
-      recentActivity: [],
-      stats: {
-        totalTasks24h: 0,
-        activeSubAgents: subAgentSessions.filter((s: Record<string, unknown>) => s.state === 'running').length,
-        avgResponseTime: 1200,
-      },
-      lastUpdated: now,
-    };
+    return data as DashboardState;
   } catch (error) {
     console.error('Status fetch error:', error);
     return generateDemoState();
