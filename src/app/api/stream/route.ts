@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server';
 import type { DashboardState, SubAgent, ActivityItem } from '@/types/dashboard';
 
-export const runtime = 'edge';
+// Use Node.js runtime to allow HTTP requests to our API server
+export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60; // Allow streaming for up to 60 seconds
 
 // Dashboard API server (runs on same server as OpenClaw)
 const DASHBOARD_API_URL = process.env.DASHBOARD_API_URL || '';
