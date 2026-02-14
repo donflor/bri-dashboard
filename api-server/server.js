@@ -13,6 +13,11 @@ const crypto = require('crypto');
 const PORT = process.env.API_PORT || 3034;
 const API_TOKEN = process.env.DASHBOARD_API_TOKEN || 'bri-dashboard-token-2026';
 const SESSIONS_FILE = '/root/.openclaw/agents/main/sessions/sessions.json';
+const SESSIONS_DIR = '/root/.openclaw/agents/main/sessions';
+
+// Cache for session last messages
+const messageCache = new Map();
+const CACHE_TTL = 60000; // 1 minute
 
 // In-memory activity log (persists while server runs)
 let activityLog = [];
@@ -35,11 +40,71 @@ function logActivity(type, description, status = 'success', duration = null) {
   return item;
 }
 
+// Get last user message from a session file
+function getLastMessage(sessionFile, sessionKey) {
+  const cacheKey = sessionKey;
+  const cached = messageCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.message;
+  }
+  
+  try {
+    // sessionFile might be full path or just filename
+    const filePath = sessionFile.startsWith('/') ? sessionFile : path.join(SESSIONS_DIR, sessionFile.split('/').pop());
+    if (!fs.existsSync(filePath)) return null;
+    
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.trim().split('\n').slice(-100); // Last 100 lines
+    
+    // Find last user message (handle both direct and nested formats)
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        
+        // Handle nested format: {message: {role: 'user', content: [...]}}
+        const msg = entry.message || entry;
+        if (msg.role === 'user' && msg.content) {
+          let text = '';
+          if (typeof msg.content === 'string') {
+            text = msg.content;
+          } else if (Array.isArray(msg.content)) {
+            text = msg.content.find(c => c.type === 'text')?.text || '';
+          }
+          
+          // Skip pure system messages, but extract content from Slack messages
+          if (text.startsWith('System:')) continue;
+          
+          // Extract actual message from Slack format: [Slack #channel ...] User: Message
+          const slackMatch = text.match(/\[Slack[^\]]+\]\s*[^:]+:\s*(.+?)(?:\s*\[slack message|$)/s);
+          if (slackMatch) {
+            text = slackMatch[1].trim();
+          }
+          
+          if (text) {
+            const message = text.slice(0, 200);
+            messageCache.set(cacheKey, { message, timestamp: Date.now() });
+            return message;
+          }
+        }
+      } catch {}
+    }
+  } catch (e) {
+    console.error('getLastMessage error:', e.message);
+  }
+  return null;
+}
+
 // Read sessions from file
 function readSessions() {
   try {
     const data = fs.readFileSync(SESSIONS_FILE, 'utf8');
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    // sessions.json is {sessionKey: sessionData} format, convert to array
+    const sessions = Object.entries(parsed).map(([key, value]) => ({
+      key,
+      ...value,
+    }));
+    return { sessions };
   } catch (error) {
     console.error('Failed to read sessions:', error.message);
     return { sessions: [] };
@@ -73,8 +138,14 @@ function buildDashboardState() {
   
   // Determine status based on recent activity
   let briStatus = 'idle';
-  if (timeSinceActivity < 10000) briStatus = 'active';
-  else if (timeSinceActivity < 60000) briStatus = 'thinking';
+  if (timeSinceActivity < 30000) briStatus = 'active';
+  else if (timeSinceActivity < 120000) briStatus = 'thinking';
+  
+  // Get current task from latest active session
+  let currentTask = null;
+  if (mainSession?.sessionFile) {
+    currentTask = getLastMessage(mainSession.sessionFile, mainSession.key);
+  }
   
   // Calculate uptime from earliest session
   const earliestSession = [...sessions].sort((a, b) => 
@@ -102,14 +173,40 @@ function buildDashboardState() {
   const sessionActivities = sortedSessions
     .filter(s => s.updatedAt > Date.now() - 24 * 60 * 60 * 1000) // Last 24h
     .slice(0, 30)
-    .map(s => ({
-      id: s.sessionId || crypto.randomUUID(),
-      type: s.kind === 'isolated' ? 'subagent' : s.key?.includes('slack') ? 'message' : 'task',
-      description: s.lastMessage?.slice(0, 150) || `Session: ${s.key?.split(':').slice(-2).join(':')}`,
-      timestamp: new Date(s.updatedAt || Date.now()).toISOString(),
-      status: 'success',
-      duration: s.totalDuration || null,
-    }));
+    .map(s => {
+      // Try to get last message from session file
+      let description = null;
+      if (s.sessionFile) {
+        const lastMsg = getLastMessage(s.sessionFile, s.key);
+        if (lastMsg) {
+          description = lastMsg.slice(0, 150);
+        }
+      }
+      
+      // Fallback description
+      if (!description) {
+        if (s.key?.includes('slack:channel')) {
+          description = `Slack conversation in ${s.displayName || s.key.split(':').pop()}`;
+        } else if (s.key?.includes('cron')) {
+          description = `Scheduled task executed`;
+        } else if (s.key?.includes('spawn')) {
+          description = `Sub-agent: ${s.label || 'background task'}`;
+        } else {
+          description = `Session activity: ${s.key?.split(':').slice(-2).join(':')}`;
+        }
+      }
+      
+      return {
+        id: s.sessionId || crypto.randomUUID(),
+        type: s.key?.includes('cron') ? 'task' : 
+              s.key?.includes('spawn') ? 'subagent' : 
+              s.key?.includes('slack') ? 'message' : 'task',
+        description,
+        timestamp: new Date(s.updatedAt || Date.now()).toISOString(),
+        status: 'success',
+        duration: s.totalDuration || null,
+      };
+    });
 
   // Merge with manual activity log
   const allActivity = [...activityLog, ...sessionActivities]
@@ -123,7 +220,7 @@ function buildDashboardState() {
   return {
     bri: {
       status: briStatus,
-      currentTask: mainSession?.lastMessage?.slice(0, 150),
+      currentTask: currentTask?.slice(0, 150),
       model: mainSession?.model || 'claude-opus-4-5',
       sessionKey: mainSession?.sessionId || 'main',
       uptime: Math.min(uptime, 86400 * 30), // Cap at 30 days
