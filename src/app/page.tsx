@@ -65,6 +65,17 @@ export default function Dashboard() {
         </div>
       </header>
 
+      {/* Demo Mode Banner */}
+      {!process.env.NEXT_PUBLIC_GATEWAY_CONNECTED && (
+        <div className="mb-6 p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 flex items-center gap-3">
+          <span className="text-xl">🎮</span>
+          <div>
+            <p className="font-medium">Demo Mode</p>
+            <p className="text-sm text-yellow-500/80">Showing simulated data. Connect to OpenClaw gateway for live updates.</p>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="mb-6 p-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400">
           {error}
