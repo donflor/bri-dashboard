@@ -47,6 +47,7 @@ async function fetchStatus(): Promise<DashboardState | null> {
           : 0,
         lastActivity: mainSession?.lastActivityAt || now,
       },
+      cronJobs: [],
       subAgents: subAgentSessions.map((s: Record<string, unknown>) => ({
         sessionKey: s.sessionKey as string,
         label: s.label as string | undefined,
@@ -62,7 +63,9 @@ async function fetchStatus(): Promise<DashboardState | null> {
       stats: {
         totalTasks24h: 0,
         activeSubAgents: subAgentSessions.filter((s: Record<string, unknown>) => s.state === 'running').length,
+        activeCronJobs: 0,
         avgResponseTime: 1200,
+        avgCompletionTime: 0,
       },
       lastUpdated: now,
     };

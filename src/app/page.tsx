@@ -169,7 +169,7 @@ export default function Dashboard() {
               </div>
 
               {/* Stats Grid */}
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div className="bg-gray-900 rounded-2xl p-4 text-center border border-gray-800">
                   <p className="text-2xl font-bold text-white">{state.stats.totalTasks24h}</p>
                   <p className="text-gray-400 text-xs mt-1">Tasks (24h)</p>
@@ -178,15 +178,27 @@ export default function Dashboard() {
                   <p className="text-2xl font-bold text-purple-400">{state.stats.activeCronJobs || 0}</p>
                   <p className="text-gray-400 text-xs mt-1">Cron Active</p>
                 </div>
+              </div>
+              
+              {/* Response & Completion Time Stats */}
+              <div className="grid grid-cols-3 gap-3">
                 <div className="bg-gray-900 rounded-2xl p-4 text-center border border-gray-800">
                   <p className="text-2xl font-bold text-blue-400">{state.stats.activeSubAgents}</p>
                   <p className="text-gray-400 text-xs mt-1">Sub-Agents</p>
                 </div>
                 <div className="bg-gray-900 rounded-2xl p-4 text-center border border-gray-800">
-                  <p className="text-2xl font-bold text-white">
+                  <p className="text-2xl font-bold text-green-400">
                     {state.stats.avgResponseTime > 0 ? `${(state.stats.avgResponseTime / 1000).toFixed(1)}s` : '-'}
                   </p>
                   <p className="text-gray-400 text-xs mt-1">Avg Response</p>
+                </div>
+                <div className="bg-gray-900 rounded-2xl p-4 text-center border border-gray-800">
+                  <p className="text-2xl font-bold text-yellow-400">
+                    {state.stats.avgCompletionTime && state.stats.avgCompletionTime > 0 
+                      ? `${(state.stats.avgCompletionTime / 1000).toFixed(1)}s` 
+                      : '-'}
+                  </p>
+                  <p className="text-gray-400 text-xs mt-1">Avg Complete</p>
                 </div>
               </div>
 
@@ -198,11 +210,19 @@ export default function Dashboard() {
                     <div key={activity.id} className="flex items-start gap-3 text-sm">
                       <StatusBadge status={activity.status} />
                       <div className="flex-1 min-w-0">
-                        <p className={`truncate ${getStatusColor(activity.status)}`}>
-                          {activity.description}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className={`truncate flex-1 ${getStatusColor(activity.status)}`}>
+                            {activity.description}
+                          </p>
+                          {activity.sourceDisplay && (
+                            <span className="text-xs text-gray-500 whitespace-nowrap">
+                              {activity.sourceDisplay}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-gray-500 text-xs">
                           {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
+                          {activity.duration && ` • ${(activity.duration / 1000).toFixed(1)}s`}
                         </p>
                       </div>
                     </div>
@@ -280,7 +300,7 @@ export default function Dashboard() {
                         <StatusBadge status={agent.status} size="lg" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <p className="font-semibold truncate">{agent.label || agent.sessionKey}</p>
                           <span className={`px-2 py-0.5 rounded-full text-xs ${
                             agent.status === 'running' ? 'bg-blue-500/20 text-blue-400' :
@@ -290,6 +310,11 @@ export default function Dashboard() {
                           }`}>
                             {agent.status}
                           </span>
+                          {agent.sourceDisplay && (
+                            <span className="px-2 py-0.5 rounded-full text-xs bg-gray-700/50 text-gray-300">
+                              from {agent.sourceDisplay}
+                            </span>
+                          )}
                         </div>
                         {agent.task && (
                           <p className="text-gray-400 text-sm mt-1 line-clamp-2">{agent.task}</p>
@@ -319,7 +344,7 @@ export default function Dashboard() {
                   <div
                     key={activity.id}
                     className={`bg-gray-900 rounded-xl p-4 border ${
-                      activity.status === 'pending' || activity.status === 'in_progress' 
+                      activity.status === 'pending' || activity.status === 'in_progress' || activity.status === 'running'
                         ? 'border-yellow-500/30' 
                         : activity.status === 'error' 
                           ? 'border-red-500/30'
@@ -329,7 +354,7 @@ export default function Dashboard() {
                     <div className="flex items-start gap-3">
                       <StatusBadge status={activity.status} />
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <span className={`text-xs px-1.5 py-0.5 rounded ${
                             activity.type === 'cron' ? 'bg-purple-500/20 text-purple-400' :
                             activity.type === 'message' ? 'bg-blue-500/20 text-blue-400' :
@@ -339,19 +364,24 @@ export default function Dashboard() {
                           }`}>
                             {activity.type}
                           </span>
+                          {activity.sourceDisplay && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-300">
+                              {activity.sourceDisplay}
+                            </span>
+                          )}
                           <span className={`text-xs ${getStatusColor(activity.status)}`}>
                             {activity.status}
                           </span>
                         </div>
                         <p className="text-sm text-white">{activity.description}</p>
-                        <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                        <div className="flex items-center gap-2 mt-1 text-xs text-gray-500 flex-wrap">
                           <span>{format(new Date(activity.timestamp), 'HH:mm:ss')}</span>
                           <span>•</span>
                           <span>{formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}</span>
                           {activity.duration && (
                             <>
                               <span>•</span>
-                              <span>{(activity.duration / 1000).toFixed(1)}s</span>
+                              <span className="text-green-500">{(activity.duration / 1000).toFixed(1)}s response</span>
                             </>
                           )}
                         </div>
