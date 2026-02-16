@@ -2,6 +2,7 @@
 /**
  * Bri Mission Control (BMC) API Server
  * Real-time dashboard for BizRnR AI operations
+ * Tracks Slack requests and response times
  */
 
 const http = require('http');
@@ -14,36 +15,36 @@ const API_TOKEN = process.env.DASHBOARD_API_TOKEN || 'bri-dashboard-token-2026';
 const SESSIONS_FILE = '/root/.openclaw/agents/main/sessions/sessions.json';
 const SESSIONS_DIR = '/root/.openclaw/agents/main/sessions';
 
-// Response time tracking
+// Response time tracking - tracks request to response for Slack messages
 const responseTimes = [];
-const MAX_RESPONSE_TIMES = 100;
+const MAX_RESPONSE_TIMES = 50;
+const pendingRequests = new Map(); // Track in-progress Slack requests
 
 // In-memory activity log
 let activityLog = [];
-const MAX_ACTIVITY_ITEMS = 500;
+const MAX_ACTIVITY_ITEMS = 200;
 
-// Track seen messages
-let lastSeenMessages = new Map();
-let lastSessionsHash = '';
+// Track seen messages for deduplication
+let seenMessages = new Set();
 
-// Add activity item with status
+// Add activity item
 function logActivity(type, description, status = 'completed', duration = null, metadata = {}) {
   const item = {
     id: crypto.randomUUID(),
     type,
     description: description.slice(0, 300),
     timestamp: new Date().toISOString(),
-    status, // pending, in_progress, completed, error, info
+    status,
     duration,
     ...metadata,
   };
   
-  // Avoid duplicates within 10 seconds
-  const recentDupe = activityLog.find(a => 
+  // Check for duplicates (same description within 30 seconds)
+  const isDupe = activityLog.some(a => 
     a.description === item.description && 
-    new Date(a.timestamp).getTime() > Date.now() - 10000
+    new Date(a.timestamp).getTime() > Date.now() - 30000
   );
-  if (recentDupe) return recentDupe;
+  if (isDupe) return null;
   
   activityLog.unshift(item);
   if (activityLog.length > MAX_ACTIVITY_ITEMS) {
@@ -53,16 +54,16 @@ function logActivity(type, description, status = 'completed', duration = null, m
 }
 
 // Track response time
-function trackResponseTime(ms) {
-  responseTimes.push({ ms, timestamp: Date.now() });
+function trackResponseTime(ms, label) {
+  responseTimes.unshift({ ms, label, timestamp: Date.now() });
   if (responseTimes.length > MAX_RESPONSE_TIMES) {
-    responseTimes.shift();
+    responseTimes.pop();
   }
 }
 
-// Calculate average response time (last 10 minutes)
+// Calculate average response time (last 5 minutes)
 function getAvgResponseTime() {
-  const cutoff = Date.now() - 600000; // 10 minutes
+  const cutoff = Date.now() - 300000; // 5 minutes
   const recent = responseTimes.filter(r => r.timestamp > cutoff);
   if (recent.length === 0) return 0;
   return Math.round(recent.reduce((sum, r) => sum + r.ms, 0) / recent.length);
@@ -75,53 +76,116 @@ function readSessions() {
     const parsed = JSON.parse(data);
     return Object.entries(parsed).map(([key, value]) => ({ key, ...value }));
   } catch (error) {
-    console.error('Failed to read sessions:', error.message);
     return [];
   }
 }
 
-// Get last message from session transcript
-function getLastMessage(transcriptPath) {
+// Parse transcript file for messages and timing
+function parseTranscript(transcriptPath) {
   try {
     const filePath = path.join(SESSIONS_DIR, transcriptPath);
-    if (!fs.existsSync(filePath)) return null;
+    if (!fs.existsSync(filePath)) return { lastMessage: null, messages: [] };
     
     const content = fs.readFileSync(filePath, 'utf8');
-    const lines = content.trim().split('\n').slice(-50);
+    const lines = content.trim().split('\n').slice(-100);
+    const messages = [];
     
-    // Find last assistant message for response time
-    for (let i = lines.length - 1; i >= 0; i--) {
+    let lastUserTime = null;
+    let lastAssistantTime = null;
+    
+    for (const line of lines) {
       try {
-        const entry = JSON.parse(lines[i]);
+        const entry = JSON.parse(line);
         const msg = entry.message || entry;
+        const timestamp = entry.timestamp || msg.timestamp;
         
-        if (msg.role === 'assistant' && msg.usage) {
-          // Calculate response time from token usage
-          const totalTokens = msg.usage.totalTokens || 0;
-          // Rough estimate: ~50 tokens/second for Opus
-          const estimatedMs = Math.round((totalTokens / 50) * 1000);
-          if (estimatedMs > 0) trackResponseTime(estimatedMs);
+        if (msg.role === 'user') {
+          lastUserTime = timestamp;
+          
+          // Extract Slack message
+          let text = typeof msg.content === 'string' ? msg.content :
+                     msg.content?.find?.(c => c.type === 'text')?.text || '';
+          
+          const slackMatch = text.match(/\[Slack[^\]]+\]\s*(\d+:\d+[^\]]*)\]\s*([^:]+):\s*(.+?)(?:\s*\[slack|$)/s) ||
+                            text.match(/Slack message in #(\S+) from ([^:]+):\s*(.+?)(?:\s*\[slack|$)/s);
+          
+          if (slackMatch) {
+            const msgId = `${transcriptPath}:${timestamp}`;
+            if (!seenMessages.has(msgId)) {
+              seenMessages.add(msgId);
+              const sender = slackMatch[2]?.replace(/<@[A-Z0-9]+>/g, '').trim() || 'User';
+              const content = slackMatch[3]?.trim().slice(0, 150) || slackMatch[1];
+              
+              // Track as pending if no response yet
+              pendingRequests.set(msgId, { 
+                timestamp, 
+                sender, 
+                content,
+                startTime: Date.now()
+              });
+              
+              messages.push({
+                type: 'incoming',
+                sender,
+                content,
+                timestamp: new Date(timestamp).toISOString(),
+                status: 'pending',
+              });
+            }
+          }
         }
         
-        if (msg.role === 'user' && msg.content) {
-          let text = typeof msg.content === 'string' ? msg.content : 
-                     msg.content.find?.(c => c.type === 'text')?.text || '';
+        if (msg.role === 'assistant' && lastUserTime) {
+          lastAssistantTime = timestamp;
           
-          // Clean Slack format
-          const slackMatch = text.match(/Slack message in #\S+ from ([^:]+):\s*(.+?)(?:\s*\[slack|$)/s);
-          if (slackMatch) {
-            return { sender: slackMatch[1].trim(), text: slackMatch[2].trim().slice(0, 200) };
+          // Calculate response time
+          if (lastUserTime && lastAssistantTime) {
+            const responseMs = lastAssistantTime - lastUserTime;
+            if (responseMs > 0 && responseMs < 300000) { // Max 5 min
+              trackResponseTime(responseMs, 'slack-response');
+              
+              // Clear any pending requests
+              for (const [key, req] of pendingRequests.entries()) {
+                if (req.timestamp === lastUserTime) {
+                  pendingRequests.delete(key);
+                }
+              }
+            }
           }
           
-          // Skip system messages
-          if (text.startsWith('System:') || text.includes('HEARTBEAT')) continue;
+          // Get response text
+          let responseText = '';
+          if (typeof msg.content === 'string') {
+            responseText = msg.content;
+          } else if (Array.isArray(msg.content)) {
+            const textContent = msg.content.find(c => c.type === 'text');
+            responseText = textContent?.text || '';
+          }
           
-          return { text: text.slice(0, 200) };
+          if (responseText && !responseText.includes('NO_REPLY') && !responseText.includes('HEARTBEAT')) {
+            messages.push({
+              type: 'response',
+              content: responseText.slice(0, 200),
+              timestamp: new Date(timestamp).toISOString(),
+              status: 'completed',
+              duration: lastAssistantTime - lastUserTime,
+            });
+          }
+          
+          lastUserTime = null;
         }
       } catch {}
     }
-  } catch {}
-  return null;
+    
+    // Keep seenMessages from growing unbounded
+    if (seenMessages.size > 1000) {
+      seenMessages = new Set([...seenMessages].slice(-500));
+    }
+    
+    return { messages: messages.slice(-20) };
+  } catch {
+    return { messages: [] };
+  }
 }
 
 // Build dashboard state
@@ -129,7 +193,6 @@ function buildDashboardState() {
   const sessions = readSessions();
   const now = new Date().toISOString();
   
-  // Sort by recency
   const sortedSessions = [...sessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   
   // Find main Slack session
@@ -137,15 +200,25 @@ function buildDashboardState() {
     s.key?.includes('slack:channel') && !s.key?.includes('thread')
   ) || sortedSessions[0];
   
-  // Find cron jobs (sessions with "cron" in key)
+  // Parse main session transcript for real-time activity
+  let slackMessages = [];
+  if (mainSession?.transcriptPath) {
+    const parsed = parseTranscript(mainSession.transcriptPath);
+    slackMessages = parsed.messages || [];
+  }
+  
+  // Find cron jobs
   const cronSessions = sortedSessions.filter(s => s.key?.includes('cron:'));
   
-  // Find sub-agents (isolated/spawn sessions)
+  // Find sub-agents
   const subAgentSessions = sortedSessions.filter(s => 
     s.kind === 'isolated' || s.key?.includes('spawn')
   );
   
-  // Calculate status
+  // Calculate status based on pending requests and recent activity
+  const hasPending = pendingRequests.size > 0 || 
+    slackMessages.some(m => m.status === 'pending');
+  
   const lastActivityMs = Math.max(
     mainSession?.updatedAt || 0,
     ...sortedSessions.slice(0, 5).map(s => s.updatedAt || 0)
@@ -153,90 +226,82 @@ function buildDashboardState() {
   const timeSinceActivity = Date.now() - lastActivityMs;
   
   let briStatus = 'idle';
-  if (timeSinceActivity < 10000) briStatus = 'active';
+  if (hasPending || timeSinceActivity < 10000) briStatus = 'active';
   else if (timeSinceActivity < 30000) briStatus = 'thinking';
   
-  // Get current task
-  let currentTask = null;
-  if (mainSession?.transcriptPath) {
-    const lastMsg = getLastMessage(mainSession.transcriptPath);
-    if (lastMsg) currentTask = lastMsg.text || lastMsg.sender;
-  }
-  
   // Build cron jobs list
-  const cronJobs = cronSessions.map(s => {
-    const lastMsg = s.transcriptPath ? getLastMessage(s.transcriptPath) : null;
+  const cronJobs = cronSessions.slice(0, 15).map(s => {
     const timeSince = Date.now() - (s.updatedAt || 0);
-    
     return {
       id: s.key?.split(':').pop() || s.sessionId,
       name: s.label || s.displayName || 'Cron Job',
       lastRun: new Date(s.updatedAt || Date.now()).toISOString(),
       status: timeSince < 60000 ? 'running' : 'completed',
-      result: lastMsg?.text?.slice(0, 100) || 'Completed',
+      result: s.displayName?.includes(':') ? s.displayName.split(':').pop().trim() : 'Completed',
       sessionKey: s.key,
     };
-  }).slice(0, 20);
+  });
   
   // Build sub-agents list
-  const subAgents = subAgentSessions.map(s => {
+  const subAgents = subAgentSessions.slice(0, 10).map(s => {
     const timeSince = Date.now() - (s.updatedAt || 0);
     return {
       sessionKey: s.sessionId || s.key,
       label: s.label || s.displayName || 'Sub-agent',
-      status: timeSince < 60000 ? 'running' : timeSince < 300000 ? 'completed' : 'idle',
+      status: timeSince < 60000 ? 'running' : 'completed',
       task: s.task || s.displayName,
       startedAt: new Date(s.createdAt || s.updatedAt || Date.now()).toISOString(),
-      completedAt: timeSince > 60000 ? new Date(s.updatedAt || Date.now()).toISOString() : undefined,
+      completedAt: timeSince > 60000 ? new Date(s.updatedAt).toISOString() : undefined,
       model: s.model,
     };
-  }).slice(0, 10);
+  });
   
-  // Build recent activity from all sessions
+  // Build activity from Slack messages + cron + pending
   const activities = [];
   
+  // Add pending requests first (in-progress)
+  for (const [key, req] of pendingRequests.entries()) {
+    const elapsed = Date.now() - req.startTime;
+    activities.push({
+      id: `pending-${key}`,
+      type: 'incoming',
+      description: `${req.sender}: ${req.content}`,
+      timestamp: new Date(req.timestamp).toISOString(),
+      status: 'in_progress',
+      duration: elapsed,
+    });
+  }
+  
+  // Add Slack messages
+  slackMessages.forEach((msg, i) => {
+    activities.push({
+      id: `slack-${i}-${msg.timestamp}`,
+      type: msg.type === 'incoming' ? 'incoming' : 'message',
+      description: msg.sender ? `${msg.sender}: ${msg.content}` : msg.content,
+      timestamp: msg.timestamp,
+      status: msg.status,
+      duration: msg.duration,
+    });
+  });
+  
   // Add cron job activities
-  cronSessions.forEach(s => {
-    const lastMsg = s.transcriptPath ? getLastMessage(s.transcriptPath) : null;
+  cronSessions.slice(0, 10).forEach(s => {
     activities.push({
       id: `cron-${s.sessionId}`,
       type: 'cron',
-      description: `${s.label || 'Cron'}: ${lastMsg?.text?.slice(0, 100) || 'Executed'}`,
+      description: s.label || s.displayName || 'Cron job executed',
       timestamp: new Date(s.updatedAt || Date.now()).toISOString(),
       status: 'completed',
       cronName: s.label,
     });
   });
   
-  // Add Slack message activities
-  sortedSessions.filter(s => s.key?.includes('slack')).forEach(s => {
-    const lastMsg = s.transcriptPath ? getLastMessage(s.transcriptPath) : null;
-    if (lastMsg?.sender || lastMsg?.text) {
-      activities.push({
-        id: `msg-${s.sessionId}`,
-        type: 'message',
-        description: lastMsg.sender ? `${lastMsg.sender}: ${lastMsg.text}` : lastMsg.text,
-        timestamp: new Date(s.updatedAt || Date.now()).toISOString(),
-        status: 'completed',
-      });
-    }
-  });
-  
-  // Merge with activity log
-  const allActivities = [...activityLog, ...activities]
+  // Sort by timestamp and dedupe
+  const sortedActivities = activities
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
     .slice(0, 50);
   
-  // Deduplicate
-  const seen = new Set();
-  const uniqueActivities = allActivities.filter(a => {
-    const key = `${a.type}:${a.description.slice(0, 50)}:${Math.floor(new Date(a.timestamp).getTime() / 60000)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  
-  // Calculate uptime
+  // Uptime calculation
   const earliestSession = [...sessions].sort((a, b) => 
     (a.createdAt || a.updatedAt || Date.now()) - (b.createdAt || b.updatedAt || Date.now())
   )[0];
@@ -244,14 +309,14 @@ function buildDashboardState() {
     ? Math.floor((Date.now() - (earliestSession.createdAt || earliestSession.updatedAt || Date.now())) / 1000)
     : 0;
   
-  // Count tasks in last 24h
+  // Tasks count
   const oneDayAgo = Date.now() - 86400000;
   const tasks24h = sessions.filter(s => (s.updatedAt || 0) > oneDayAgo).length;
   
   return {
     bri: {
       status: briStatus,
-      currentTask: currentTask?.slice(0, 150),
+      currentTask: slackMessages.find(m => m.status === 'pending')?.content?.slice(0, 150),
       model: mainSession?.model || 'claude-opus-4-5',
       sessionKey: mainSession?.sessionId || 'main',
       uptime: Math.min(uptime, 86400 * 30),
@@ -259,7 +324,7 @@ function buildDashboardState() {
     },
     cronJobs,
     subAgents,
-    recentActivity: uniqueActivities,
+    recentActivity: sortedActivities,
     stats: {
       totalTasks24h: tasks24h,
       activeSubAgents: subAgents.filter(s => s.status === 'running').length,
@@ -296,21 +361,18 @@ const server = http.createServer((req, res) => {
 
   const url = new URL(req.url, `http://${req.headers.host}`);
   
-  // Health check
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
     return;
   }
 
-  // Auth required
   if (!checkAuth(req)) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Unauthorized' }));
     return;
   }
 
-  // Status endpoint
   if (url.pathname === '/api/status') {
     const state = buildDashboardState();
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -318,25 +380,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Activity log endpoint
-  if (url.pathname === '/api/activity' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
-      try {
-        const { type, description, status, duration, ...metadata } = JSON.parse(body);
-        const item = logActivity(type, description, status, duration, metadata);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, item }));
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid JSON' }));
-      }
-    });
-    return;
-  }
-
-  // SSE stream
   if (url.pathname === '/api/stream') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -350,7 +393,7 @@ const server = http.createServer((req, res) => {
     };
 
     sendState();
-    const interval = setInterval(sendState, 2000);
+    const interval = setInterval(sendState, 1500); // Faster updates
 
     req.on('close', () => clearInterval(interval));
     return;
@@ -362,13 +405,10 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🦾 Bri Mission Control API running on port ${PORT}`);
-  console.log(`   Status: http://localhost:${PORT}/api/status`);
-  console.log(`   Stream: http://localhost:${PORT}/api/stream`);
-  logActivity('system', 'BMC API server started', 'info');
+  console.log(`   Tracking Slack response times in real-time`);
 });
 
 process.on('SIGTERM', () => {
-  console.log('Shutting down...');
   server.close();
   process.exit(0);
 });
