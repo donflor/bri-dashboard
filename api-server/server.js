@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
- * Bri Dashboard API Server
- * Exposes OpenClaw session data via HTTP API
- * Run alongside the OpenClaw gateway on the same server
+ * Bri Mission Control (BMC) API Server
+ * Real-time dashboard for BizRnR AI operations
  */
 
 const http = require('http');
@@ -15,24 +14,37 @@ const API_TOKEN = process.env.DASHBOARD_API_TOKEN || 'bri-dashboard-token-2026';
 const SESSIONS_FILE = '/root/.openclaw/agents/main/sessions/sessions.json';
 const SESSIONS_DIR = '/root/.openclaw/agents/main/sessions';
 
-// Cache for session last messages
-const messageCache = new Map();
-const CACHE_TTL = 60000; // 1 minute
+// Response time tracking
+const responseTimes = [];
+const MAX_RESPONSE_TIMES = 100;
 
-// In-memory activity log (persists while server runs)
+// In-memory activity log
 let activityLog = [];
-const MAX_ACTIVITY_ITEMS = 200;
+const MAX_ACTIVITY_ITEMS = 500;
 
-// Add activity item
-function logActivity(type, description, status = 'success', duration = null) {
+// Track seen messages
+let lastSeenMessages = new Map();
+let lastSessionsHash = '';
+
+// Add activity item with status
+function logActivity(type, description, status = 'completed', duration = null, metadata = {}) {
   const item = {
     id: crypto.randomUUID(),
     type,
-    description: description.slice(0, 200),
+    description: description.slice(0, 300),
     timestamp: new Date().toISOString(),
-    status,
+    status, // pending, in_progress, completed, error, info
     duration,
+    ...metadata,
   };
+  
+  // Avoid duplicates within 10 seconds
+  const recentDupe = activityLog.find(a => 
+    a.description === item.description && 
+    new Date(a.timestamp).getTime() > Date.now() - 10000
+  );
+  if (recentDupe) return recentDupe;
+  
   activityLog.unshift(item);
   if (activityLog.length > MAX_ACTIVITY_ITEMS) {
     activityLog = activityLog.slice(0, MAX_ACTIVITY_ITEMS);
@@ -40,58 +52,20 @@ function logActivity(type, description, status = 'success', duration = null) {
   return item;
 }
 
-// Get last user message from a session file
-function getLastMessage(sessionFile, sessionKey) {
-  const cacheKey = sessionKey;
-  const cached = messageCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.message;
+// Track response time
+function trackResponseTime(ms) {
+  responseTimes.push({ ms, timestamp: Date.now() });
+  if (responseTimes.length > MAX_RESPONSE_TIMES) {
+    responseTimes.shift();
   }
-  
-  try {
-    // sessionFile might be full path or just filename
-    const filePath = sessionFile.startsWith('/') ? sessionFile : path.join(SESSIONS_DIR, sessionFile.split('/').pop());
-    if (!fs.existsSync(filePath)) return null;
-    
-    const content = fs.readFileSync(filePath, 'utf8');
-    const lines = content.trim().split('\n').slice(-100); // Last 100 lines
-    
-    // Find last user message (handle both direct and nested formats)
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const entry = JSON.parse(lines[i]);
-        
-        // Handle nested format: {message: {role: 'user', content: [...]}}
-        const msg = entry.message || entry;
-        if (msg.role === 'user' && msg.content) {
-          let text = '';
-          if (typeof msg.content === 'string') {
-            text = msg.content;
-          } else if (Array.isArray(msg.content)) {
-            text = msg.content.find(c => c.type === 'text')?.text || '';
-          }
-          
-          // Skip pure system messages, but extract content from Slack messages
-          if (text.startsWith('System:')) continue;
-          
-          // Extract actual message from Slack format: [Slack #channel ...] User: Message
-          const slackMatch = text.match(/\[Slack[^\]]+\]\s*[^:]+:\s*(.+?)(?:\s*\[slack message|$)/s);
-          if (slackMatch) {
-            text = slackMatch[1].trim();
-          }
-          
-          if (text) {
-            const message = text.slice(0, 200);
-            messageCache.set(cacheKey, { message, timestamp: Date.now() });
-            return message;
-          }
-        }
-      } catch {}
-    }
-  } catch (e) {
-    console.error('getLastMessage error:', e.message);
-  }
-  return null;
+}
+
+// Calculate average response time (last 10 minutes)
+function getAvgResponseTime() {
+  const cutoff = Date.now() - 600000; // 10 minutes
+  const recent = responseTimes.filter(r => r.timestamp > cutoff);
+  if (recent.length === 0) return 0;
+  return Math.round(recent.reduce((sum, r) => sum + r.ms, 0) / recent.length);
 }
 
 // Read sessions from file
@@ -99,155 +73,201 @@ function readSessions() {
   try {
     const data = fs.readFileSync(SESSIONS_FILE, 'utf8');
     const parsed = JSON.parse(data);
-    // sessions.json is {sessionKey: sessionData} format, convert to array
-    const sessions = Object.entries(parsed).map(([key, value]) => ({
-      key,
-      ...value,
-    }));
-    return { sessions };
+    return Object.entries(parsed).map(([key, value]) => ({ key, ...value }));
   } catch (error) {
     console.error('Failed to read sessions:', error.message);
-    return { sessions: [] };
+    return [];
   }
 }
 
-// Build dashboard state from session data
+// Get last message from session transcript
+function getLastMessage(transcriptPath) {
+  try {
+    const filePath = path.join(SESSIONS_DIR, transcriptPath);
+    if (!fs.existsSync(filePath)) return null;
+    
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.trim().split('\n').slice(-50);
+    
+    // Find last assistant message for response time
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        const msg = entry.message || entry;
+        
+        if (msg.role === 'assistant' && msg.usage) {
+          // Calculate response time from token usage
+          const totalTokens = msg.usage.totalTokens || 0;
+          // Rough estimate: ~50 tokens/second for Opus
+          const estimatedMs = Math.round((totalTokens / 50) * 1000);
+          if (estimatedMs > 0) trackResponseTime(estimatedMs);
+        }
+        
+        if (msg.role === 'user' && msg.content) {
+          let text = typeof msg.content === 'string' ? msg.content : 
+                     msg.content.find?.(c => c.type === 'text')?.text || '';
+          
+          // Clean Slack format
+          const slackMatch = text.match(/Slack message in #\S+ from ([^:]+):\s*(.+?)(?:\s*\[slack|$)/s);
+          if (slackMatch) {
+            return { sender: slackMatch[1].trim(), text: slackMatch[2].trim().slice(0, 200) };
+          }
+          
+          // Skip system messages
+          if (text.startsWith('System:') || text.includes('HEARTBEAT')) continue;
+          
+          return { text: text.slice(0, 200) };
+        }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+// Build dashboard state
 function buildDashboardState() {
-  const data = readSessions();
-  const sessions = data.sessions || [];
+  const sessions = readSessions();
   const now = new Date().toISOString();
   
-  // Find the main/most recent session
-  const sortedSessions = [...sessions].sort((a, b) => 
-    (b.updatedAt || 0) - (a.updatedAt || 0)
-  );
+  // Sort by recency
+  const sortedSessions = [...sessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   
+  // Find main Slack session
   const mainSession = sortedSessions.find(s => 
-    s.kind === 'main' || s.agentId === 'main' || s.key?.includes('slack')
+    s.key?.includes('slack:channel') && !s.key?.includes('thread')
   ) || sortedSessions[0];
   
-  // Find sub-agents (isolated sessions with recent activity)
+  // Find cron jobs (sessions with "cron" in key)
+  const cronSessions = sortedSessions.filter(s => s.key?.includes('cron:'));
+  
+  // Find sub-agents (isolated/spawn sessions)
   const subAgentSessions = sortedSessions.filter(s => 
-    s.kind === 'isolated' || s.kind === 'subagent' || 
-    (s.key?.includes('spawn') && s.updatedAt > Date.now() - 3600000)
-  ).slice(0, 10);
-
-  // Calculate time since last activity
-  const lastActivityMs = mainSession?.updatedAt || Date.now();
+    s.kind === 'isolated' || s.key?.includes('spawn')
+  );
+  
+  // Calculate status
+  const lastActivityMs = Math.max(
+    mainSession?.updatedAt || 0,
+    ...sortedSessions.slice(0, 5).map(s => s.updatedAt || 0)
+  );
   const timeSinceActivity = Date.now() - lastActivityMs;
   
-  // Determine status based on recent activity
   let briStatus = 'idle';
-  if (timeSinceActivity < 30000) briStatus = 'active';
-  else if (timeSinceActivity < 120000) briStatus = 'thinking';
+  if (timeSinceActivity < 10000) briStatus = 'active';
+  else if (timeSinceActivity < 30000) briStatus = 'thinking';
   
-  // Get current task from latest active session
+  // Get current task
   let currentTask = null;
-  if (mainSession?.sessionFile) {
-    currentTask = getLastMessage(mainSession.sessionFile, mainSession.key);
+  if (mainSession?.transcriptPath) {
+    const lastMsg = getLastMessage(mainSession.transcriptPath);
+    if (lastMsg) currentTask = lastMsg.text || lastMsg.sender;
   }
   
-  // Calculate uptime from earliest session
+  // Build cron jobs list
+  const cronJobs = cronSessions.map(s => {
+    const lastMsg = s.transcriptPath ? getLastMessage(s.transcriptPath) : null;
+    const timeSince = Date.now() - (s.updatedAt || 0);
+    
+    return {
+      id: s.key?.split(':').pop() || s.sessionId,
+      name: s.label || s.displayName || 'Cron Job',
+      lastRun: new Date(s.updatedAt || Date.now()).toISOString(),
+      status: timeSince < 60000 ? 'running' : 'completed',
+      result: lastMsg?.text?.slice(0, 100) || 'Completed',
+      sessionKey: s.key,
+    };
+  }).slice(0, 20);
+  
+  // Build sub-agents list
+  const subAgents = subAgentSessions.map(s => {
+    const timeSince = Date.now() - (s.updatedAt || 0);
+    return {
+      sessionKey: s.sessionId || s.key,
+      label: s.label || s.displayName || 'Sub-agent',
+      status: timeSince < 60000 ? 'running' : timeSince < 300000 ? 'completed' : 'idle',
+      task: s.task || s.displayName,
+      startedAt: new Date(s.createdAt || s.updatedAt || Date.now()).toISOString(),
+      completedAt: timeSince > 60000 ? new Date(s.updatedAt || Date.now()).toISOString() : undefined,
+      model: s.model,
+    };
+  }).slice(0, 10);
+  
+  // Build recent activity from all sessions
+  const activities = [];
+  
+  // Add cron job activities
+  cronSessions.forEach(s => {
+    const lastMsg = s.transcriptPath ? getLastMessage(s.transcriptPath) : null;
+    activities.push({
+      id: `cron-${s.sessionId}`,
+      type: 'cron',
+      description: `${s.label || 'Cron'}: ${lastMsg?.text?.slice(0, 100) || 'Executed'}`,
+      timestamp: new Date(s.updatedAt || Date.now()).toISOString(),
+      status: 'completed',
+      cronName: s.label,
+    });
+  });
+  
+  // Add Slack message activities
+  sortedSessions.filter(s => s.key?.includes('slack')).forEach(s => {
+    const lastMsg = s.transcriptPath ? getLastMessage(s.transcriptPath) : null;
+    if (lastMsg?.sender || lastMsg?.text) {
+      activities.push({
+        id: `msg-${s.sessionId}`,
+        type: 'message',
+        description: lastMsg.sender ? `${lastMsg.sender}: ${lastMsg.text}` : lastMsg.text,
+        timestamp: new Date(s.updatedAt || Date.now()).toISOString(),
+        status: 'completed',
+      });
+    }
+  });
+  
+  // Merge with activity log
+  const allActivities = [...activityLog, ...activities]
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 50);
+  
+  // Deduplicate
+  const seen = new Set();
+  const uniqueActivities = allActivities.filter(a => {
+    const key = `${a.type}:${a.description.slice(0, 50)}:${Math.floor(new Date(a.timestamp).getTime() / 60000)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  
+  // Calculate uptime
   const earliestSession = [...sessions].sort((a, b) => 
     (a.createdAt || a.updatedAt || Date.now()) - (b.createdAt || b.updatedAt || Date.now())
   )[0];
   const uptime = earliestSession 
     ? Math.floor((Date.now() - (earliestSession.createdAt || earliestSession.updatedAt || Date.now())) / 1000)
     : 0;
-
-  // Build sub-agents list
-  const subAgents = subAgentSessions.map(s => {
-    const sessionAge = Date.now() - (s.updatedAt || Date.now());
-    return {
-      sessionKey: s.sessionId || s.key,
-      label: s.label || s.key?.split(':').pop()?.slice(0, 30) || 'sub-agent',
-      status: sessionAge < 60000 ? 'running' : 'completed',
-      task: s.lastMessage?.slice(0, 150) || s.task?.slice(0, 150) || 'Processing...',
-      startedAt: new Date(s.createdAt || s.updatedAt || Date.now()).toISOString(),
-      completedAt: sessionAge > 60000 ? new Date(s.updatedAt || Date.now()).toISOString() : undefined,
-      model: s.model,
-    };
-  });
-
-  // Auto-generate activity from sessions
-  const sessionActivities = sortedSessions
-    .filter(s => s.updatedAt > Date.now() - 24 * 60 * 60 * 1000) // Last 24h
-    .slice(0, 30)
-    .map(s => {
-      // Try to get last message from session file
-      let description = null;
-      if (s.sessionFile) {
-        const lastMsg = getLastMessage(s.sessionFile, s.key);
-        if (lastMsg) {
-          description = lastMsg.slice(0, 150);
-        }
-      }
-      
-      // Fallback description
-      if (!description) {
-        if (s.key?.includes('slack:channel')) {
-          description = `Slack conversation in ${s.displayName || s.key.split(':').pop()}`;
-        } else if (s.key?.includes('cron')) {
-          description = `Scheduled task executed`;
-        } else if (s.key?.includes('spawn')) {
-          description = `Sub-agent: ${s.label || 'background task'}`;
-        } else {
-          description = `Session activity: ${s.key?.split(':').slice(-2).join(':')}`;
-        }
-      }
-      
-      return {
-        id: s.sessionId || crypto.randomUUID(),
-        type: s.key?.includes('cron') ? 'task' : 
-              s.key?.includes('spawn') ? 'subagent' : 
-              s.key?.includes('slack') ? 'message' : 'task',
-        description,
-        timestamp: new Date(s.updatedAt || Date.now()).toISOString(),
-        status: 'success',
-        duration: s.totalDuration || null,
-      };
-    });
-
-  // Merge with manual activity log
-  const allActivity = [...activityLog, ...sessionActivities]
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-    .slice(0, 50);
-
-  // Filter to last 24 hours
-  const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-  const recentActivity = allActivity.filter(a => new Date(a.timestamp).getTime() > oneDayAgo);
-
+  
+  // Count tasks in last 24h
+  const oneDayAgo = Date.now() - 86400000;
+  const tasks24h = sessions.filter(s => (s.updatedAt || 0) > oneDayAgo).length;
+  
   return {
     bri: {
       status: briStatus,
       currentTask: currentTask?.slice(0, 150),
       model: mainSession?.model || 'claude-opus-4-5',
       sessionKey: mainSession?.sessionId || 'main',
-      uptime: Math.min(uptime, 86400 * 30), // Cap at 30 days
+      uptime: Math.min(uptime, 86400 * 30),
       lastActivity: new Date(lastActivityMs).toISOString(),
     },
+    cronJobs,
     subAgents,
-    recentActivity,
+    recentActivity: uniqueActivities,
     stats: {
-      totalTasks24h: recentActivity.length,
+      totalTasks24h: tasks24h,
       activeSubAgents: subAgents.filter(s => s.status === 'running').length,
-      avgResponseTime: 2100,
+      activeCronJobs: cronJobs.filter(c => c.status === 'running').length,
+      avgResponseTime: getAvgResponseTime(),
     },
     lastUpdated: now,
   };
-}
-
-// Watch for session file changes
-let lastMtime = 0;
-function checkSessionChanges() {
-  try {
-    const stats = fs.statSync(SESSIONS_FILE);
-    if (stats.mtimeMs > lastMtime) {
-      lastMtime = stats.mtimeMs;
-      return true;
-    }
-  } catch {}
-  return false;
 }
 
 // CORS headers
@@ -261,15 +281,13 @@ function setCorsHeaders(res) {
 function checkAuth(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return false;
-  const token = authHeader.replace('Bearer ', '');
-  return token === API_TOKEN;
+  return authHeader.replace('Bearer ', '') === API_TOKEN;
 }
 
-// Request handler
+// Server
 const server = http.createServer((req, res) => {
   setCorsHeaders(res);
   
-  // Handle preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
@@ -278,14 +296,14 @@ const server = http.createServer((req, res) => {
 
   const url = new URL(req.url, `http://${req.headers.host}`);
   
-  // Health check (no auth required)
+  // Health check
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
     return;
   }
 
-  // Auth required for other endpoints
+  // Auth required
   if (!checkAuth(req)) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Unauthorized' }));
@@ -300,17 +318,17 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Log activity endpoint (POST)
+  // Activity log endpoint
   if (url.pathname === '/api/activity' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
       try {
-        const { type, description, status, duration } = JSON.parse(body);
-        const item = logActivity(type, description, status, duration);
+        const { type, description, status, duration, ...metadata } = JSON.parse(body);
+        const item = logActivity(type, description, status, duration, metadata);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, item }));
-      } catch (e) {
+      } catch {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid JSON' }));
       }
@@ -318,7 +336,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // SSE stream endpoint
+  // SSE stream
   if (url.pathname === '/api/stream') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -326,58 +344,29 @@ const server = http.createServer((req, res) => {
       'Connection': 'keep-alive',
     });
 
-    // Send initial state
-    const initialState = buildDashboardState();
-    res.write(`data: ${JSON.stringify(initialState)}\n\n`);
-
-    // Poll and send updates every 2 seconds
-    let lastState = JSON.stringify(initialState);
-    const interval = setInterval(() => {
-      // Check if sessions file changed
-      const changed = checkSessionChanges();
+    const sendState = () => {
       const state = buildDashboardState();
-      const stateJson = JSON.stringify(state);
-      
-      // Send update if state changed or file was modified
-      if (stateJson !== lastState || changed) {
-        lastState = stateJson;
-        res.write(`data: ${stateJson}\n\n`);
-      }
-    }, 2000);
+      res.write(`data: ${JSON.stringify(state)}\n\n`);
+    };
 
-    // Cleanup on close
-    req.on('close', () => {
-      clearInterval(interval);
-    });
+    sendState();
+    const interval = setInterval(sendState, 2000);
+
+    req.on('close', () => clearInterval(interval));
     return;
   }
 
-  // 404
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not found' }));
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🦾 Bri Dashboard API Server running on port ${PORT}`);
-  console.log(`   Health: http://localhost:${PORT}/health`);
+  console.log(`🦾 Bri Mission Control API running on port ${PORT}`);
   console.log(`   Status: http://localhost:${PORT}/api/status`);
   console.log(`   Stream: http://localhost:${PORT}/api/stream`);
-  console.log(`   Sessions file: ${SESSIONS_FILE}`);
-  
-  // Initialize mtime
-  try {
-    const stats = fs.statSync(SESSIONS_FILE);
-    lastMtime = stats.mtimeMs;
-    console.log(`   Found ${readSessions().sessions?.length || 0} sessions`);
-  } catch (e) {
-    console.log('   Warning: Could not read sessions file');
-  }
-  
-  // Log startup activity
-  logActivity('system', 'Dashboard API server started', 'info');
+  logActivity('system', 'BMC API server started', 'info');
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('Shutting down...');
   server.close();

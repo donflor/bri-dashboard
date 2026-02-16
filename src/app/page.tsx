@@ -15,9 +15,15 @@ function StatusBadge({ status, size = 'sm' }: { status: string; size?: 'sm' | 'l
     running: 'bg-blue-500 animate-pulse',
     completed: 'bg-green-500',
     failed: 'bg-red-500',
+    error: 'bg-red-500',
+    pending: 'bg-yellow-500 animate-pulse',
+    in_progress: 'bg-blue-500 animate-pulse',
+    scheduled: 'bg-purple-500',
+    success: 'bg-green-500',
+    info: 'bg-blue-400',
   };
 
-  const sizeClass = size === 'lg' ? 'w-4 h-4' : 'w-3 h-3';
+  const sizeClass = size === 'lg' ? 'w-4 h-4' : 'w-2.5 h-2.5';
 
   return (
     <span className={`inline-block ${sizeClass} rounded-full ${colors[status] || 'bg-gray-400'}`} />
@@ -31,7 +37,21 @@ function formatDuration(seconds: number): string {
   return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
 }
 
-type TabType = 'status' | 'agents' | 'activity';
+function getStatusColor(status: string): string {
+  const colors: Record<string, string> = {
+    completed: 'text-green-400',
+    success: 'text-green-400',
+    running: 'text-blue-400',
+    in_progress: 'text-blue-400',
+    pending: 'text-yellow-400',
+    error: 'text-red-400',
+    failed: 'text-red-400',
+    info: 'text-blue-300',
+  };
+  return colors[status] || 'text-gray-400';
+}
+
+type TabType = 'status' | 'cron' | 'agents' | 'activity';
 
 export default function Dashboard() {
   const { data: session, status: authStatus } = useSession();
@@ -40,7 +60,6 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabType>('status');
   const isAdmin = (session?.user as { role?: string })?.role === 'admin';
 
-  // Require authentication
   useEffect(() => {
     if (authStatus === 'loading') return;
     if (!session) {
@@ -64,13 +83,13 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white flex flex-col">
-      {/* Header - Fixed */}
+      {/* Header */}
       <header className="sticky top-0 z-40 bg-gray-950/95 backdrop-blur border-b border-gray-800 px-4 py-3">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
           <div className="flex items-center gap-3">
             <span className="text-3xl">🦾</span>
             <div>
-              <h1 className="text-lg font-bold">Bri</h1>
+              <h1 className="text-lg font-bold">Bri Mission Control</h1>
               <div className="flex items-center gap-2 text-xs">
                 <StatusBadge status={state.bri.status} />
                 <span className="text-gray-400 capitalize">{state.bri.status}</span>
@@ -112,14 +131,14 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* Main Content - Scrollable */}
+      {/* Main Content */}
       <main className="flex-1 overflow-y-auto pb-20">
         <div className="max-w-4xl mx-auto p-4 space-y-4">
           
-          {/* Status Tab Content */}
+          {/* Status Tab */}
           {activeTab === 'status' && (
             <>
-              {/* Big Status Card */}
+              {/* Status Card */}
               <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-3xl p-6 border border-gray-700">
                 <div className="flex items-center justify-between mb-6">
                   <div className="flex items-center gap-4">
@@ -150,30 +169,103 @@ export default function Dashboard() {
               </div>
 
               {/* Stats Grid */}
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-3">
                 <div className="bg-gray-900 rounded-2xl p-4 text-center border border-gray-800">
-                  <p className="text-3xl font-bold text-white">{state.stats.totalTasks24h}</p>
+                  <p className="text-2xl font-bold text-white">{state.stats.totalTasks24h}</p>
                   <p className="text-gray-400 text-xs mt-1">Tasks (24h)</p>
                 </div>
                 <div className="bg-gray-900 rounded-2xl p-4 text-center border border-gray-800">
-                  <p className="text-3xl font-bold text-blue-400">{state.stats.activeSubAgents}</p>
-                  <p className="text-gray-400 text-xs mt-1">Active Agents</p>
+                  <p className="text-2xl font-bold text-purple-400">{state.stats.activeCronJobs || 0}</p>
+                  <p className="text-gray-400 text-xs mt-1">Cron Active</p>
                 </div>
                 <div className="bg-gray-900 rounded-2xl p-4 text-center border border-gray-800">
-                  <p className="text-3xl font-bold text-white">{(state.stats.avgResponseTime / 1000).toFixed(1)}s</p>
+                  <p className="text-2xl font-bold text-blue-400">{state.stats.activeSubAgents}</p>
+                  <p className="text-gray-400 text-xs mt-1">Sub-Agents</p>
+                </div>
+                <div className="bg-gray-900 rounded-2xl p-4 text-center border border-gray-800">
+                  <p className="text-2xl font-bold text-white">
+                    {state.stats.avgResponseTime > 0 ? `${(state.stats.avgResponseTime / 1000).toFixed(1)}s` : '-'}
+                  </p>
                   <p className="text-gray-400 text-xs mt-1">Avg Response</p>
+                </div>
+              </div>
+
+              {/* Quick Activity Preview */}
+              <div className="bg-gray-900 rounded-2xl p-4 border border-gray-800">
+                <h3 className="text-sm font-semibold text-gray-300 mb-3">Recent Activity</h3>
+                <div className="space-y-2">
+                  {state.recentActivity.slice(0, 5).map((activity) => (
+                    <div key={activity.id} className="flex items-start gap-3 text-sm">
+                      <StatusBadge status={activity.status} />
+                      <div className="flex-1 min-w-0">
+                        <p className={`truncate ${getStatusColor(activity.status)}`}>
+                          {activity.description}
+                        </p>
+                        <p className="text-gray-500 text-xs">
+                          {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </>
           )}
 
-          {/* Agents Tab Content */}
+          {/* Cron Jobs Tab */}
+          {activeTab === 'cron' && (
+            <div className="space-y-3">
+              <h2 className="text-lg font-semibold text-gray-300 px-1">Cron Jobs</h2>
+              {(!state.cronJobs || state.cronJobs.length === 0) ? (
+                <div className="bg-gray-900 rounded-2xl p-8 text-center border border-gray-800">
+                  <p className="text-gray-400">No cron jobs found</p>
+                </div>
+              ) : (
+                state.cronJobs.map((job) => (
+                  <div key={job.id} className="bg-gray-900 rounded-2xl p-4 border border-gray-800">
+                    <div className="flex items-start gap-4">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                        job.status === 'running' ? 'bg-blue-500/20' :
+                        job.status === 'completed' ? 'bg-green-500/20' :
+                        job.status === 'error' ? 'bg-red-500/20' :
+                        'bg-purple-500/20'
+                      }`}>
+                        <span className="text-lg">⏰</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="font-semibold truncate">{job.name}</p>
+                          <span className={`px-2 py-0.5 rounded-full text-xs ${
+                            job.status === 'running' ? 'bg-blue-500/20 text-blue-400' :
+                            job.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+                            job.status === 'error' ? 'bg-red-500/20 text-red-400' :
+                            'bg-purple-500/20 text-purple-400'
+                          }`}>
+                            {job.status}
+                          </span>
+                        </div>
+                        {job.result && (
+                          <p className="text-gray-400 text-sm line-clamp-2">{job.result}</p>
+                        )}
+                        <p className="text-gray-500 text-xs mt-1">
+                          Last run: {formatDistanceToNow(new Date(job.lastRun), { addSuffix: true })}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* Sub-Agents Tab */}
           {activeTab === 'agents' && (
             <div className="space-y-3">
               <h2 className="text-lg font-semibold text-gray-300 px-1">Sub-Agents</h2>
               {state.subAgents.length === 0 ? (
                 <div className="bg-gray-900 rounded-2xl p-8 text-center border border-gray-800">
                   <p className="text-gray-400">No sub-agents running</p>
+                  <p className="text-gray-500 text-sm mt-2">Sub-agents are spawned for complex background tasks</p>
                 </div>
               ) : (
                 state.subAgents.map((agent) => (
@@ -214,10 +306,10 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Activity Tab Content */}
+          {/* Activity Tab */}
           {activeTab === 'activity' && (
             <div className="space-y-2">
-              <h2 className="text-lg font-semibold text-gray-300 px-1">Recent Activity</h2>
+              <h2 className="text-lg font-semibold text-gray-300 px-1">Activity Log</h2>
               {state.recentActivity.length === 0 ? (
                 <div className="bg-gray-900 rounded-2xl p-8 text-center border border-gray-800">
                   <p className="text-gray-400">No recent activity</p>
@@ -226,21 +318,36 @@ export default function Dashboard() {
                 state.recentActivity.map((activity) => (
                   <div
                     key={activity.id}
-                    className="bg-gray-900 rounded-xl p-4 border border-gray-800"
+                    className={`bg-gray-900 rounded-xl p-4 border ${
+                      activity.status === 'pending' || activity.status === 'in_progress' 
+                        ? 'border-yellow-500/30' 
+                        : activity.status === 'error' 
+                          ? 'border-red-500/30'
+                          : 'border-gray-800'
+                    }`}
                   >
                     <div className="flex items-start gap-3">
-                      <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
-                        activity.status === 'success' ? 'bg-green-500' :
-                        activity.status === 'error' ? 'bg-red-500' :
-                        activity.status === 'pending' ? 'bg-yellow-500 animate-pulse' :
-                        'bg-blue-500'
-                      }`} />
+                      <StatusBadge status={activity.status} />
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm">{activity.description}</p>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                            activity.type === 'cron' ? 'bg-purple-500/20 text-purple-400' :
+                            activity.type === 'message' ? 'bg-blue-500/20 text-blue-400' :
+                            activity.type === 'subagent' ? 'bg-cyan-500/20 text-cyan-400' :
+                            activity.type === 'incoming' ? 'bg-yellow-500/20 text-yellow-400' :
+                            'bg-gray-700 text-gray-400'
+                          }`}>
+                            {activity.type}
+                          </span>
+                          <span className={`text-xs ${getStatusColor(activity.status)}`}>
+                            {activity.status}
+                          </span>
+                        </div>
+                        <p className="text-sm text-white">{activity.description}</p>
                         <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
-                          <span>{format(new Date(activity.timestamp), 'HH:mm')}</span>
+                          <span>{format(new Date(activity.timestamp), 'HH:mm:ss')}</span>
                           <span>•</span>
-                          <span className="capitalize">{activity.type}</span>
+                          <span>{formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}</span>
                           {activity.duration && (
                             <>
                               <span>•</span>
@@ -258,47 +365,31 @@ export default function Dashboard() {
         </div>
       </main>
 
-      {/* Bottom Navigation - Fixed */}
+      {/* Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 right-0 bg-gray-900/95 backdrop-blur border-t border-gray-800 px-4 py-2 safe-area-pb">
         <div className="max-w-md mx-auto flex justify-around">
-          <button
-            onClick={() => setActiveTab('status')}
-            className={`flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-colors ${
-              activeTab === 'status' ? 'text-blue-400' : 'text-gray-500'
-            }`}
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-            <span className="text-xs font-medium">Status</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('agents')}
-            className={`flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-colors relative ${
-              activeTab === 'agents' ? 'text-blue-400' : 'text-gray-500'
-            }`}
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-            </svg>
-            <span className="text-xs font-medium">Agents</span>
-            {state.stats.activeSubAgents > 0 && (
-              <span className="absolute -top-1 -right-1 w-5 h-5 bg-blue-500 rounded-full text-xs flex items-center justify-center text-white font-bold">
-                {state.stats.activeSubAgents}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('activity')}
-            className={`flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-colors ${
-              activeTab === 'activity' ? 'text-blue-400' : 'text-gray-500'
-            }`}
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span className="text-xs font-medium">Activity</span>
-          </button>
+          {[
+            { id: 'status', icon: '📊', label: 'Status' },
+            { id: 'cron', icon: '⏰', label: 'Cron', badge: state.cronJobs?.length || 0 },
+            { id: 'agents', icon: '🤖', label: 'Agents', badge: state.stats.activeSubAgents },
+            { id: 'activity', icon: '📋', label: 'Activity' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as TabType)}
+              className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-colors relative ${
+                activeTab === tab.id ? 'text-blue-400' : 'text-gray-500'
+              }`}
+            >
+              <span className="text-xl">{tab.icon}</span>
+              <span className="text-xs font-medium">{tab.label}</span>
+              {tab.badge !== undefined && tab.badge > 0 && (
+                <span className="absolute -top-1 -right-1 w-5 h-5 bg-blue-500 rounded-full text-xs flex items-center justify-center text-white font-bold">
+                  {tab.badge}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
       </nav>
     </div>

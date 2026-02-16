@@ -11,11 +11,13 @@ const INITIAL_STATE: DashboardState = {
     uptime: 0,
     lastActivity: new Date().toISOString(),
   },
+  cronJobs: [],
   subAgents: [],
   recentActivity: [],
   stats: {
     totalTasks24h: 0,
     activeSubAgents: 0,
+    activeCronJobs: 0,
     avgResponseTime: 0,
   },
   lastUpdated: new Date().toISOString(),
