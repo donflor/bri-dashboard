@@ -56,7 +56,7 @@ setInterval(saveMetrics, 30000); // Save every 30s
 
 // Track a response time (minimum 1s - real AI responses take at least this long)
 function trackResponseTime(ms, source) {
-  if (ms >= 1000 && ms < 300000) { // Between 1s and 5 min
+  if (ms >= 500 && ms < 300000) { // Between 500ms and 5 min
     metrics.responseTimes.unshift({ ms, timestamp: Date.now(), source });
     if (metrics.responseTimes.length > MAX_METRICS) metrics.responseTimes.pop();
   }
@@ -64,7 +64,7 @@ function trackResponseTime(ms, source) {
 
 // Track completion time
 function trackCompletionTime(ms, source) {
-  if (ms >= 2000 && ms < 600000) { // Between 2s and 10 min
+  if (ms >= 500 && ms < 600000) { // Between 500ms and 10 min
     metrics.completionTimes.unshift({ ms, timestamp: Date.now(), source });
     if (metrics.completionTimes.length > MAX_METRICS) metrics.completionTimes.pop();
   }
@@ -381,7 +381,7 @@ function buildDashboardState() {
   
   // === CALCULATE STATS ===
   const oneDayAgo = Date.now() - 86400000;
-  const tasks24h = sessions.filter(s => (s.updatedAt || 0) > oneDayAgo).length;
+  const tasks24h = sortedActivities.filter(a => new Date(a.timestamp).getTime() > oneDayAgo).length;
   
   const avgResponseTime = getAvgResponseTime();
   const avgCompletionTime = getAvgCompletionTime();
@@ -397,7 +397,24 @@ function buildDashboardState() {
   return {
     bri: {
       status: briStatus,
-      currentTask: sortedActivities.find(a => a.type === 'incoming')?.description?.slice(0, 150),
+      currentTask: (() => {
+        // Show running sub-agent task first
+        const runningAgent = subAgents.find(s => s.status === 'running');
+        if (runningAgent) return `Running: ${(runningAgent.label || runningAgent.task || 'Sub-agent task').slice(0, 120)}`;
+        // If active, show last incoming message (cleaned up)
+        if (briStatus === 'active' || briStatus === 'thinking') {
+          const lastIncoming = sortedActivities.find(a => a.type === 'incoming');
+          if (lastIncoming) {
+            let desc = lastIncoming.description
+              .replace(/<@[A-Z0-9]+>/g, '') // strip Slack mentions
+              .replace(/\[slack\s+message\s+id:[^\]]*\]/gi, '')
+              .replace(/\[message_id:[^\]]*\]/gi, '')
+              .trim();
+            return desc.slice(0, 150) || null;
+          }
+        }
+        return null;
+      })(),
       model: mainSession?.model || 'claude-opus-4-5',
       sessionKey: mainSession?.sessionId || 'main',
       uptime: Math.min(uptime, 86400 * 30),
@@ -413,6 +430,24 @@ function buildDashboardState() {
       avgResponseTime,
       avgCompletionTime,
     },
+    trends: (() => {
+      // Compute hourly activity counts for the last 8 hours
+      const hours = 8;
+      const buckets = Array(hours).fill(0);
+      const errorBuckets = Array(hours).fill(0);
+      const nowMs = Date.now();
+      for (const a of sortedActivities) {
+        const age = nowMs - new Date(a.timestamp).getTime();
+        const bucket = Math.floor(age / 3600000);
+        if (bucket >= 0 && bucket < hours) {
+          buckets[hours - 1 - bucket]++;
+          if (a.status === 'error') errorBuckets[hours - 1 - bucket]++;
+        }
+      }
+      // Response time trend (last 8 data points)
+      const rtSamples = metrics.responseTimes.slice(0, 8).map(r => r.ms / 1000).reverse();
+      return { tasks: buckets, errors: errorBuckets, responseTimes: rtSamples };
+    })(),
     lastUpdated: now,
   };
 }
