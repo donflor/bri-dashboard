@@ -86,15 +86,28 @@ export default function Dashboard() {
   const [pullProgress, setPullProgress] = useState(0);
   const isAdmin = (session?.user as { role?: string })?.role === 'admin';
 
-  // Sparkline trend data (generated once, stable across renders)
-  const [trendData] = useState(() => ({
-    tasks: generateTrendData(8, 'up'),
-    cron: generateTrendData(8, 'stable'),
-    agents: generateTrendData(8, 'up'),
-    response: generateTrendData(8, 'down'),
-    completion: generateTrendData(8, 'stable'),
-    errors: generateTrendData(8, 'down'),
-  }));
+  // Sparkline trend data — use real data from API if available, fallback to generated
+  const trendData = useMemo(() => {
+    const trends = (state as any).trends;
+    if (trends) {
+      return {
+        tasks: trends.tasks?.length ? trends.tasks : generateTrendData(8, 'up'),
+        cron: generateTrendData(8, 'stable'),
+        agents: generateTrendData(8, 'up'),
+        response: trends.responseTimes?.length ? trends.responseTimes : generateTrendData(8, 'down'),
+        completion: generateTrendData(8, 'stable'),
+        errors: trends.errors?.length ? trends.errors : generateTrendData(8, 'down'),
+      };
+    }
+    return {
+      tasks: generateTrendData(8, 'up'),
+      cron: generateTrendData(8, 'stable'),
+      agents: generateTrendData(8, 'up'),
+      response: generateTrendData(8, 'down'),
+      completion: generateTrendData(8, 'stable'),
+      errors: generateTrendData(8, 'down'),
+    };
+  }, [state]);
 
   // ── Auth redirect ──
   useEffect(() => {
