@@ -23,6 +23,8 @@ export interface CronJob {
   id: string;
   name: string;
   lastRun: string;
+  nextRun?: string;
+  schedule?: string;
   status: 'running' | 'completed' | 'error' | 'scheduled';
   result?: string;
   sessionKey?: string;
@@ -50,6 +52,23 @@ export interface BriStatus {
   lastActivity: string;
 }
 
+export interface MetricsData {
+  responseTimes: { ms: number; timestamp: number; source?: string }[];
+  completionTimes: { ms: number; timestamp: number; source?: string }[];
+  responseSamples: number;
+  completionSamples: number;
+  avgResponseTime: number;
+  avgCompletionTime: number;
+}
+
+export interface SystemHealth {
+  gateway: 'connected' | 'disconnected' | 'error';
+  apiServer: 'connected' | 'disconnected' | 'error';
+  uptime: number;
+  memoryUsage?: { rss: number; heapUsed: number; heapTotal: number };
+  lastCheck: string;
+}
+
 export interface DashboardState {
   bri: BriStatus;
   cronJobs: CronJob[];
@@ -61,6 +80,9 @@ export interface DashboardState {
     activeCronJobs: number;
     avgResponseTime: number; // ms - time to first response
     avgCompletionTime?: number; // ms - total task completion time
+    tokenUsage?: number;
+    estimatedCost?: number;
+    errorRate?: number;
   };
   lastUpdated: string;
 }
