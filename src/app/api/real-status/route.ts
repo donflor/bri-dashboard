@@ -47,16 +47,22 @@ async function fetchCronJobs(): Promise<CronJob[]> {
     { jobs: [] }
   );
   
-  return (data.jobs || []).map((j: any) => ({
-    id: j.id,
-    name: j.name || j.id,
-    schedule: j.schedule?.expr || (j.schedule?.everyMs ? `every ${Math.round(j.schedule.everyMs / 60000)}m` : '—'),
-    lastRun: j.state?.lastRunAtMs ? new Date(j.state.lastRunAtMs).toISOString() : '—',
-    nextRun: j.state?.nextRunAtMs ? new Date(j.state.nextRunAtMs).toISOString() : undefined,
-    status: j.state?.lastStatus === 'ok' ? 'completed' as const : j.state?.lastStatus === 'error' ? 'error' as const : 'scheduled' as const,
-    result: j.state?.lastStatus || undefined,
-    sessionKey: j.id,
-  }));
+  return (data.jobs || []).map((j: any) => {
+    // Gateway proxy flattens state fields to top-level
+    const lastStatus = j.lastStatus || j.state?.lastStatus || null;
+    const lastRun = j.lastRun || (j.state?.lastRunAtMs ? new Date(j.state.lastRunAtMs).toISOString() : null);
+    const nextRun = j.nextRun || (j.state?.nextRunAtMs ? new Date(j.state.nextRunAtMs).toISOString() : undefined);
+    return {
+      id: j.id,
+      name: j.name || j.id,
+      schedule: j.schedule || '—',
+      lastRun: lastRun || '—',
+      nextRun,
+      status: lastStatus === 'ok' ? 'completed' as const : lastStatus === 'error' ? 'error' as const : 'scheduled' as const,
+      result: lastStatus || undefined,
+      sessionKey: j.id,
+    };
+  });
 }
 
 async function fetchSubAgents(): Promise<SubAgent[]> {
@@ -70,15 +76,15 @@ async function fetchSubAgents(): Promise<SubAgent[]> {
     { sessions: [] }
   );
 
-  return (data.sessions || [])
-    .filter((s: any) => s.key?.includes('subagent'))
+  return (data.sessions || data.subAgents || [])
+    .filter((s: any) => s.key?.includes('subagent') || s.sessionKey?.includes('subagent'))
     .slice(0, 20)
     .map((s: any) => ({
-      sessionKey: s.key,
-      label: s.key.split(':').pop() || s.key,
-      status: s.ageMs < 120_000 ? 'running' as const : 'completed' as const,
+      sessionKey: s.sessionKey || s.key,
+      label: s.label || (s.sessionKey || s.key || '').split(':').pop(),
+      status: (s.status === 'running' || (s.ageMs && s.ageMs < 120_000)) ? 'running' as const : 'completed' as const,
       task: s.model || undefined,
-      startedAt: new Date(s.updatedAt - (s.ageMs || 0)).toISOString(),
+      startedAt: s.updatedAt ? new Date(s.updatedAt - (s.ageMs || 0)).toISOString() : new Date().toISOString(),
       model: s.model,
     }));
 }
@@ -165,6 +171,21 @@ async function buildDashboardState(): Promise<DashboardState> {
       duration: parseInt(c.duration || '0') * 1000,
       metadata: { source: 'twilio', direction: c.direction },
     });
+  }
+
+  // Cron job runs as activity items
+  for (const cj of cronJobs) {
+    if (cj.lastRun && cj.lastRun !== '—') {
+      recentActivity.push({
+        id: `cron-${cj.id}`,
+        type: 'cron',
+        description: `${cj.name}`,
+        timestamp: cj.lastRun,
+        status: cj.status === 'completed' ? 'success' : cj.status === 'error' ? 'error' : 'info',
+        cronName: cj.name,
+        metadata: { source: 'openclaw_cron', schedule: cj.schedule },
+      });
+    }
   }
 
   // Sort by timestamp desc
