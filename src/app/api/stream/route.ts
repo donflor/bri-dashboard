@@ -9,48 +9,32 @@ const DASHBOARD_API_URL = process.env.DASHBOARD_API_URL || '';
 const DASHBOARD_API_TOKEN = process.env.DASHBOARD_API_TOKEN || '';
 
 async function fetchStatus(): Promise<DashboardState | null> {
-  if (!DASHBOARD_API_URL) {
-    // Return empty state if no API configured
-    return {
-      bri: {
-        status: 'offline',
-        model: 'claude-opus-4-5',
-        sessionKey: 'main',
-        uptime: 0,
-        lastActivity: new Date().toISOString(),
-      },
-      cronJobs: [],
-      subAgents: [],
-      recentActivity: [],
-      stats: {
-        totalTasks24h: 0,
-        activeSubAgents: 0,
-        activeCronJobs: 0,
-        avgResponseTime: 0,
-      },
-      lastUpdated: new Date().toISOString(),
-    };
+  // Try external API first if configured
+  if (DASHBOARD_API_URL) {
+    try {
+      const response = await fetch(`${DASHBOARD_API_URL}/api/status`, {
+        headers: {
+          'Authorization': `Bearer ${DASHBOARD_API_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        cache: 'no-store',
+      });
+      if (response.ok) return await response.json();
+    } catch (error) {
+      console.error('External API error, falling back to real-status:', error);
+    }
   }
   
+  // Fall back to internal real-status route
   try {
-    const response = await fetch(`${DASHBOARD_API_URL}/api/status`, {
-      headers: {
-        'Authorization': `Bearer ${DASHBOARD_API_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      cache: 'no-store',
-    });
-    
-    if (!response.ok) {
-      console.error('Dashboard API error:', response.status);
-      return null;
-    }
-    
-    return await response.json();
+    const { GET } = await import('../real-status/route');
+    const response = await GET();
+    if (response.ok) return await response.json();
   } catch (error) {
-    console.error('Status fetch error:', error);
-    return null;
+    console.error('Real status fetch error:', error);
   }
+  
+  return null;
 }
 
 export async function GET(request: NextRequest) {

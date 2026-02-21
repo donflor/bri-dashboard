@@ -11,7 +11,7 @@ import { ActivityChart } from '@/components/ActivityChart';
 import { ToastContainer, type ToastItem } from '@/components/Toast';
 import { BottomSheet } from '@/components/BottomSheet';
 import { EmptyState } from '@/components/EmptyState';
-import { generateTrendData } from '@/lib/mockData';
+// Mock data removed — all data from real APIs
 import type { ActivityItem, SubAgent } from '@/types/dashboard';
 import { ObservabilityPanel } from '@/components/ObservabilityPanel';
 import { AgentManagementPanel } from '@/components/AgentManagementPanel';
@@ -86,27 +86,21 @@ export default function Dashboard() {
   const [pullProgress, setPullProgress] = useState(0);
   const isAdmin = (session?.user as { role?: string })?.role === 'admin';
 
-  // Sparkline trend data — use real data from API if available, fallback to generated
+  // Sparkline trend data — derived from real activity data (no mock)
   const trendData = useMemo(() => {
     const trends = (state as any).trends;
+    const zeros = [0, 0, 0, 0, 0, 0, 0, 0];
     if (trends) {
       return {
-        tasks: trends.tasks?.length ? trends.tasks : generateTrendData(8, 'up'),
-        cron: generateTrendData(8, 'stable'),
-        agents: generateTrendData(8, 'up'),
-        response: trends.responseTimes?.length ? trends.responseTimes : generateTrendData(8, 'down'),
-        completion: generateTrendData(8, 'stable'),
-        errors: trends.errors?.length ? trends.errors : generateTrendData(8, 'down'),
+        tasks: trends.tasks?.length ? trends.tasks : zeros,
+        cron: trends.cron?.length ? trends.cron : zeros,
+        agents: trends.agents?.length ? trends.agents : zeros,
+        response: trends.responseTimes?.length ? trends.responseTimes : zeros,
+        completion: trends.completion?.length ? trends.completion : zeros,
+        errors: trends.errors?.length ? trends.errors : zeros,
       };
     }
-    return {
-      tasks: generateTrendData(8, 'up'),
-      cron: generateTrendData(8, 'stable'),
-      agents: generateTrendData(8, 'up'),
-      response: generateTrendData(8, 'down'),
-      completion: generateTrendData(8, 'stable'),
-      errors: generateTrendData(8, 'down'),
-    };
+    return { tasks: zeros, cron: zeros, agents: zeros, response: zeros, completion: zeros, errors: zeros };
   }, [state]);
 
   // ── Auth redirect ──
