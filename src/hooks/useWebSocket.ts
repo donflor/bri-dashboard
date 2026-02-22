@@ -29,6 +29,7 @@ export function useWebSocket() {
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttemptsRef = useRef(0);
 
   const connect = useCallback(() => {
     // Clean up existing connection
@@ -43,6 +44,7 @@ export function useWebSocket() {
       console.log('SSE connected');
       setConnected(true);
       setError(null);
+      reconnectAttemptsRef.current = 0;
     };
 
     eventSource.onmessage = (event) => {
@@ -60,11 +62,14 @@ export function useWebSocket() {
       setError('Connection lost. Reconnecting...');
       eventSource.close();
 
-      // Reconnect after 3 seconds
+      // Exponential backoff: 3s, 6s, 12s, max 30s
+      const delay = Math.min(3000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+      reconnectAttemptsRef.current++;
+      
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      reconnectTimeoutRef.current = setTimeout(connect, 3000);
+      reconnectTimeoutRef.current = setTimeout(connect, delay);
     };
   }, []);
 
