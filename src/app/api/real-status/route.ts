@@ -70,7 +70,7 @@ async function fetchSubAgents(): Promise<SubAgent[]> {
   const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (!gatewayUrl) return [];
 
-  const data = await safeFetch<{ sessions?: any[] }>(
+  const data = await safeFetch<{ sessions?: any[]; subAgents?: any[] }>(
     `${gatewayUrl}/api/sessions/list`,
     { headers: gatewayToken ? { Authorization: `Bearer ${gatewayToken}` } : {} },
     { sessions: [] }
