@@ -218,7 +218,7 @@ async function buildDashboardState(): Promise<DashboardState> {
       totalTasks24h: crmActivities.filter((a: any) => new Date(a.created_at) > new Date(yesterday)).length + twilioCalls.length,
       activeSubAgents: activeAgents,
       activeCronJobs: activeCrons,
-      avgResponseTime: 1200, // Will be replaced when we have real metrics
+      avgResponseTime: 0, // Populated from gateway metrics
       tokenUsage: totalEmailsSent,
       estimatedCost: undefined,
       errorRate: crmActivities.filter((a: any) => a.outcome === 'error').length / Math.max(crmActivities.length, 1),

@@ -466,6 +466,7 @@ export default function Dashboard() {
               totalActivities={state.recentActivity.length}
               avgResponseTime={state.stats.avgResponseTime}
               avgCompletionTime={state.stats.avgCompletionTime}
+              cronJobs={state.cronJobs}
             />
           )}
 
