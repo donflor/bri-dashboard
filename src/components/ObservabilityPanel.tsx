@@ -268,8 +268,8 @@ export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime
           <div className="space-y-2 text-sm">
             {infra.system && (
               <div className="grid grid-cols-3 gap-2">
-                <div><span className="text-[var(--text-muted)]">CPU</span><br/><span className="font-mono">{infra.system.cpuCount} cores ({infra.system.loadAvg['1m']} load)</span></div>
-                <div><span className="text-[var(--text-muted)]">RAM</span><br/><span className="font-mono">{infra.system.memory.usedGB}/{infra.system.memory.totalGB}GB ({infra.system.memory.usedPercent}%)</span></div>
+                <div><span className="text-[var(--text-muted)]">CPU</span><br/><span className="font-mono">{infra.system.cpuCount} cores {infra.system.loadAvg ? `(${infra.system.loadAvg['1m']} load)` : ''}</span></div>
+                <div><span className="text-[var(--text-muted)]">RAM</span><br/><span className="font-mono">{infra.system.memory.usedGB || '?'}/{infra.system.memory.totalGB}GB ({infra.system.memory.usedPercent}%)</span></div>
                 <div><span className="text-[var(--text-muted)]">Disk</span><br/><span className="font-mono">{infra.system.diskUsage}</span></div>
               </div>
             )}
@@ -277,7 +277,7 @@ export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime
               <div className="flex items-center gap-2 pt-2 border-t border-[var(--border-color)]">
                 <span className={`w-2 h-2 rounded-full ${infra.redis.status === 'healthy' ? 'bg-green-500' : 'bg-red-500'}`} />
                 <span>Redis</span>
-                <span className="text-[var(--text-muted)] ml-auto font-mono text-xs">{infra.redis.usedMemory}/{infra.redis.maxMemory} | {infra.redis.evictionPolicy}</span>
+                <span className="text-[var(--text-muted)] ml-auto font-mono text-xs">{infra.redis.usedMemory || '?'}/{infra.redis.maxMemory || '?'} | {infra.redis.evictionPolicy || '?'}</span>
               </div>
             )}
             {infra.bullmq?.cluster && (
@@ -287,7 +287,7 @@ export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime
                 <span className="text-[var(--text-muted)] ml-auto font-mono text-xs">{infra.bullmq.cluster.workers} workers | {infra.bullmq.cluster.memoryMB || '?'}MB</span>
               </div>
             )}
-            {infra.bullmq?.queues && (
+            {infra.bullmq?.queues && typeof infra.bullmq.queues === 'object' && (
               <div className="grid grid-cols-3 gap-1 pt-2 border-t border-[var(--border-color)]">
                 {Object.entries(infra.bullmq.queues).map(([name, q]: [string, any]) => (
                   <div key={name} className="text-xs">
@@ -327,25 +327,25 @@ export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime
           <div className="grid grid-cols-2 gap-3">
             <div>
               <p className="text-xs text-[var(--text-muted)]">Total Leads</p>
-              <p className="text-xl font-bold text-blue-400">{infra.crm.total.toLocaleString()}</p>
+              <p className="text-xl font-bold text-blue-400">{(infra.crm.total || 0).toLocaleString()}</p>
             </div>
             <div>
               <p className="text-xs text-[var(--text-muted)]">With Email</p>
-              <p className="text-xl font-bold text-green-400">{infra.crm.withEmail.toLocaleString()} <span className="text-xs font-normal text-[var(--text-muted)]">({infra.crm.emailRate}%)</span></p>
+              <p className="text-xl font-bold text-green-400">{(infra.crm.withEmail || 0).toLocaleString()} <span className="text-xs font-normal text-[var(--text-muted)]">({infra.crm.emailRate || 0}%)</span></p>
             </div>
             <div>
               <p className="text-xs text-[var(--text-muted)]">With Phone</p>
-              <p className="text-xl font-bold text-cyan-400">{infra.crm.withPhone.toLocaleString()}</p>
+              <p className="text-xl font-bold text-cyan-400">{(infra.crm.withPhone || 0).toLocaleString()}</p>
             </div>
             <div>
               <p className="text-xs text-[var(--text-muted)]">Hot Leads</p>
-              <p className="text-xl font-bold text-red-400">{infra.crm.hot}</p>
+              <p className="text-xl font-bold text-red-400">{infra.crm.hot || 0}</p>
             </div>
           </div>
           {infra.blog && (
             <div className="mt-3 pt-3 border-t border-[var(--border-color)] flex justify-between">
               <span className="text-xs text-[var(--text-muted)]">Blog Posts</span>
-              <span className="text-sm font-bold text-purple-400">{infra.blog.publishedPosts}</span>
+              <span className="text-sm font-bold text-purple-400">{infra.blog.publishedPosts || 0}</span>
             </div>
           )}
         </div>
