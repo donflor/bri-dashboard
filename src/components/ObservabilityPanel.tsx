@@ -1,17 +1,56 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, CartesianGrid,
-} from 'recharts';
-import type { MetricsData, SystemHealth } from '@/types/dashboard';
+import { useEffect, useState, useCallback, Component, type ReactNode } from 'react';
+import dynamic from 'next/dynamic';
+
+// Lazy-load recharts to avoid SSR/React 19 crash
+const LazyAreaChart = dynamic(() => import('recharts').then(m => {
+  const { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } = m;
+  return { default: ({ data }: { data: Array<{ name: string; ms: number }> }) => (
+    <ResponsiveContainer width="100%" height={160}>
+      <AreaChart data={data}>
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+        <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+        <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+        <Tooltip />
+        <Area type="monotone" dataKey="ms" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.15} strokeWidth={2} />
+      </AreaChart>
+    </ResponsiveContainer>
+  )};
+}), { ssr: false, loading: () => <div className="h-40 flex items-center justify-center text-[var(--text-muted)] text-sm">Loading chart...</div> });
+
+const LazyBarChart = dynamic(() => import('recharts').then(m => {
+  const { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } = m;
+  return { default: ({ data }: { data: Array<{ range: string; count: number }> }) => (
+    <ResponsiveContainer width="100%" height={120}>
+      <BarChart data={data}>
+        <XAxis dataKey="range" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+        <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+        <Bar dataKey="count" fill="#a855f7" radius={[4, 4, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  )};
+}), { ssr: false, loading: () => <div className="h-32 flex items-center justify-center text-[var(--text-muted)] text-sm">Loading chart...</div> });
+
+// Error boundary for chart rendering
+class ChartErrorBoundary extends Component<{ children: ReactNode; fallback?: string }, { hasError: boolean }> {
+  constructor(props: { children: ReactNode; fallback?: string }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  render() {
+    if (this.state.hasError) return <div className="text-[var(--text-muted)] text-sm py-4 text-center">{this.props.fallback || 'Chart unavailable'}</div>;
+    return this.props.children;
+  }
+}
 
 interface ObservabilityPanelProps {
   errorRate: number;
   totalActivities: number;
   avgResponseTime: number;
   avgCompletionTime?: number;
+  cronJobs?: Array<{ name: string; status: string; lastRun: string; schedule?: string; result?: string }>;
 }
 
 interface HealthData {
@@ -22,17 +61,14 @@ interface HealthData {
   timestamp: string;
 }
 
-// Custom tooltip styling
-function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number }>; label?: string }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg px-3 py-2 text-xs shadow-lg">
-      <p className="text-[var(--text-muted)]">{label}</p>
-      <p className="text-[var(--text-primary)] font-semibold">{payload[0].value.toLocaleString()}ms</p>
-    </div>
-  );
+interface MetricsRaw {
+  avgResponseTime?: number;
+  avgCompletionTime?: number;
+  responseSamples?: number;
+  completionSamples?: number;
+  recentResponseTimes?: Array<{ ms: number; timestamp: number; source?: any }>;
+  responseTimes?: Array<{ ms: number; timestamp: number; source?: any }>;
 }
-
 
 interface InfraData {
   system?: { cpuCount: number; loadAvg: { '1m': string }; memory: { usedGB: string; totalGB: string; usedPercent: number }; diskUsage: string };
@@ -44,8 +80,8 @@ interface InfraData {
   architecture?: Record<string, any>;
 }
 
-export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime, avgCompletionTime }: ObservabilityPanelProps) {
-  const [metrics, setMetrics] = useState<MetricsData | null>(null);
+export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime, avgCompletionTime, cronJobs }: ObservabilityPanelProps) {
+  const [metrics, setMetrics] = useState<MetricsRaw | null>(null);
   const [health, setHealth] = useState<HealthData | null>(null);
   const [infra, setInfra] = useState<InfraData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -69,21 +105,21 @@ export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime
 
   useEffect(() => {
     fetchMetrics();
-    const interval = setInterval(fetchMetrics, 30000); // Refresh every 30s
+    const interval = setInterval(fetchMetrics, 30000);
     return () => clearInterval(interval);
   }, [fetchMetrics]);
 
-  // Format response time data for charts
-  const responseTimeData = (metrics?.responseTimes || [])
+  // Normalize: API may return `recentResponseTimes` or `responseTimes`
+  const responseTimes = metrics?.responseTimes || metrics?.recentResponseTimes || [];
+
+  const responseTimeData = responseTimes
     .slice(0, 30)
     .reverse()
-    .map((rt, i) => ({
+    .map((rt) => ({
       name: new Date(rt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       ms: Math.round(rt.ms),
-      idx: i,
     }));
 
-  // Bucket response times into histogram
   const histogram = (() => {
     const buckets = [
       { range: '<2s', min: 0, max: 2000, count: 0 },
@@ -92,12 +128,16 @@ export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime
       { range: '10-30s', min: 10000, max: 30000, count: 0 },
       { range: '30s+', min: 30000, max: Infinity, count: 0 },
     ];
-    (metrics?.responseTimes || []).forEach(rt => {
+    responseTimes.forEach(rt => {
       const bucket = buckets.find(b => rt.ms >= b.min && rt.ms < b.max);
       if (bucket) bucket.count++;
     });
     return buckets;
   })();
+
+  // Failed crons
+  const failedCrons = (cronJobs || []).filter(c => c.status === 'error');
+  const healthyCrons = (cronJobs || []).filter(c => c.status === 'completed');
 
   const statusColor = (s: string) =>
     s === 'connected' || s === 'ok' ? 'text-green-400' :
@@ -148,6 +188,21 @@ export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime
         </div>
       </div>
 
+      {/* Failed Crons Alert */}
+      {failedCrons.length > 0 && (
+        <div className="bg-red-500/10 rounded-2xl p-4 border border-red-500/30">
+          <h3 className="text-sm font-semibold text-red-400 mb-2">⚠️ Failed Cron Jobs ({failedCrons.length})</h3>
+          <div className="space-y-2">
+            {failedCrons.map((cron, i) => (
+              <div key={i} className="flex items-center justify-between text-sm">
+                <span className="text-[var(--text-primary)]">{cron.name}</span>
+                <span className="text-xs text-red-400">{cron.lastRun !== '—' ? new Date(cron.lastRun).toLocaleDateString() : 'never ran'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Key Metrics Summary */}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
@@ -178,9 +233,11 @@ export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime
           </p>
         </div>
         <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
-          <p className="text-xs text-[var(--text-muted)] mb-1">Total Activities</p>
-          <p className="text-2xl font-bold text-blue-400">{totalActivities}</p>
-          <p className="text-xs text-[var(--text-muted)]">last 24h</p>
+          <p className="text-xs text-[var(--text-muted)] mb-1">Cron Health</p>
+          <p className={`text-2xl font-bold ${failedCrons.length > 0 ? 'text-red-400' : 'text-green-400'}`}>
+            {healthyCrons.length}/{(cronJobs || []).length}
+          </p>
+          <p className="text-xs text-[var(--text-muted)]">healthy crons</p>
         </div>
       </div>
 
@@ -188,40 +245,22 @@ export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime
       {responseTimeData.length > 2 && (
         <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
           <h3 className="text-sm font-semibold text-[var(--text-secondary)] mb-3">Response Latency</h3>
-          <ResponsiveContainer width="100%" height={160}>
-            <AreaChart data={responseTimeData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-              <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
-              <Tooltip content={<CustomTooltip />} />
-              <Area
-                type="monotone"
-                dataKey="ms"
-                stroke="#3b82f6"
-                fill="#3b82f6"
-                fillOpacity={0.15}
-                strokeWidth={2}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          <ChartErrorBoundary fallback="Response latency chart unavailable">
+            <LazyAreaChart data={responseTimeData} />
+          </ChartErrorBoundary>
         </div>
       )}
 
       {/* Response Time Histogram */}
-      {metrics && metrics.responseSamples > 0 && (
+      {responseTimes.length > 0 && (
         <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
           <h3 className="text-sm font-semibold text-[var(--text-secondary)] mb-3">Response Time Distribution</h3>
-          <ResponsiveContainer width="100%" height={120}>
-            <BarChart data={histogram}>
-              <XAxis dataKey="range" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
-              <Bar dataKey="count" fill="#a855f7" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <ChartErrorBoundary fallback="Distribution chart unavailable">
+            <LazyBarChart data={histogram} />
+          </ChartErrorBoundary>
         </div>
       )}
 
-      
       {/* Infrastructure Status */}
       {infra && (
         <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
