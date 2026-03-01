@@ -33,19 +33,33 @@ function CustomTooltip({ active, payload, label }: { active?: boolean; payload?:
   );
 }
 
+
+interface InfraData {
+  system?: { cpuCount: number; loadAvg: { '1m': string }; memory: { usedGB: string; totalGB: string; usedPercent: number }; diskUsage: string };
+  redis?: { status: string; usedMemory?: string; maxMemory?: string; evictionPolicy?: string };
+  bullmq?: { cluster: { status: string; workers: number; memoryMB?: number }; queues: Record<string, { active?: number; waiting?: number; completed?: number; failed?: number }> };
+  docker?: { name: string; status: string; uptime: string }[];
+  crm?: { total: number; withEmail: number; withPhone: number; hot: number; emailRate: number };
+  blog?: { publishedPosts: number };
+  architecture?: Record<string, any>;
+}
+
 export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime, avgCompletionTime }: ObservabilityPanelProps) {
   const [metrics, setMetrics] = useState<MetricsData | null>(null);
   const [health, setHealth] = useState<HealthData | null>(null);
+  const [infra, setInfra] = useState<InfraData | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchMetrics = useCallback(async () => {
     try {
-      const [metricsRes, healthRes] = await Promise.all([
+      const [metricsRes, healthRes, infraRes] = await Promise.all([
         fetch('/api/gateway?endpoint=/api/metrics'),
         fetch('/api/gateway/health'),
+        fetch('/api/infra').catch(() => ({ ok: false } as Response)),
       ]);
       if (metricsRes.ok) setMetrics(await metricsRes.json());
       if (healthRes.ok) setHealth(await healthRes.json());
+      if (infraRes.ok) setInfra(await infraRes.json());
     } catch {
       // silent
     } finally {
@@ -204,6 +218,112 @@ export function ObservabilityPanel({ errorRate, totalActivities, avgResponseTime
               <Bar dataKey="count" fill="#a855f7" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      )}
+
+      
+      {/* Infrastructure Status */}
+      {infra && (
+        <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
+          <h3 className="text-sm font-semibold text-[var(--text-secondary)] mb-3">🏗️ Infrastructure</h3>
+          <div className="space-y-2 text-sm">
+            {infra.system && (
+              <div className="grid grid-cols-3 gap-2">
+                <div><span className="text-[var(--text-muted)]">CPU</span><br/><span className="font-mono">{infra.system.cpuCount} cores ({infra.system.loadAvg['1m']} load)</span></div>
+                <div><span className="text-[var(--text-muted)]">RAM</span><br/><span className="font-mono">{infra.system.memory.usedGB}/{infra.system.memory.totalGB}GB ({infra.system.memory.usedPercent}%)</span></div>
+                <div><span className="text-[var(--text-muted)]">Disk</span><br/><span className="font-mono">{infra.system.diskUsage}</span></div>
+              </div>
+            )}
+            {infra.redis && (
+              <div className="flex items-center gap-2 pt-2 border-t border-[var(--border-color)]">
+                <span className={`w-2 h-2 rounded-full ${infra.redis.status === 'healthy' ? 'bg-green-500' : 'bg-red-500'}`} />
+                <span>Redis</span>
+                <span className="text-[var(--text-muted)] ml-auto font-mono text-xs">{infra.redis.usedMemory}/{infra.redis.maxMemory} | {infra.redis.evictionPolicy}</span>
+              </div>
+            )}
+            {infra.bullmq?.cluster && (
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${infra.bullmq.cluster.status === 'healthy' ? 'bg-green-500' : 'bg-yellow-500'}`} />
+                <span>BullMQ Cluster</span>
+                <span className="text-[var(--text-muted)] ml-auto font-mono text-xs">{infra.bullmq.cluster.workers} workers | {infra.bullmq.cluster.memoryMB || '?'}MB</span>
+              </div>
+            )}
+            {infra.bullmq?.queues && (
+              <div className="grid grid-cols-3 gap-1 pt-2 border-t border-[var(--border-color)]">
+                {Object.entries(infra.bullmq.queues).map(([name, q]: [string, any]) => (
+                  <div key={name} className="text-xs">
+                    <span className="text-[var(--text-muted)]">{name}</span>
+                    <span className="ml-1 font-mono">
+                      {q.active > 0 && <span className="text-blue-400">{q.active}⚡</span>}
+                      {q.waiting > 0 && <span className="text-yellow-400 ml-1">{q.waiting}⏳</span>}
+                      {q.completed > 0 && <span className="text-green-400 ml-1">{q.completed}✓</span>}
+                      {q.failed > 0 && <span className="text-red-400 ml-1">{q.failed}✗</span>}
+                      {!q.active && !q.waiting && !q.completed && !q.failed && <span className="text-[var(--text-muted)]">idle</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {infra.docker && infra.docker.length > 0 && (
+              <div className="pt-2 border-t border-[var(--border-color)]">
+                <p className="text-xs text-[var(--text-muted)] mb-1">Docker ({infra.docker.length})</p>
+                <div className="grid grid-cols-2 gap-1">
+                  {infra.docker.map((c: any) => (
+                    <div key={c.name} className="flex items-center gap-1 text-xs">
+                      <span className={`w-1.5 h-1.5 rounded-full ${c.status === 'healthy' ? 'bg-green-500' : 'bg-red-500'}`} />
+                      <span className="font-mono truncate">{c.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* CRM & Pipeline */}
+      {infra?.crm && (
+        <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
+          <h3 className="text-sm font-semibold text-[var(--text-secondary)] mb-3">📊 Pipeline</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-xs text-[var(--text-muted)]">Total Leads</p>
+              <p className="text-xl font-bold text-blue-400">{infra.crm.total.toLocaleString()}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--text-muted)]">With Email</p>
+              <p className="text-xl font-bold text-green-400">{infra.crm.withEmail.toLocaleString()} <span className="text-xs font-normal text-[var(--text-muted)]">({infra.crm.emailRate}%)</span></p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--text-muted)]">With Phone</p>
+              <p className="text-xl font-bold text-cyan-400">{infra.crm.withPhone.toLocaleString()}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--text-muted)]">Hot Leads</p>
+              <p className="text-xl font-bold text-red-400">{infra.crm.hot}</p>
+            </div>
+          </div>
+          {infra.blog && (
+            <div className="mt-3 pt-3 border-t border-[var(--border-color)] flex justify-between">
+              <span className="text-xs text-[var(--text-muted)]">Blog Posts</span>
+              <span className="text-sm font-bold text-purple-400">{infra.blog.publishedPosts}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Architecture */}
+      {infra?.architecture && (
+        <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
+          <h3 className="text-sm font-semibold text-[var(--text-secondary)] mb-3">⚡ Architecture</h3>
+          <div className="space-y-2 text-xs">
+            <div className="flex justify-between"><span className="text-[var(--text-muted)]">Router Agent</span><span className="font-mono">{infra.architecture.routerAgent?.model} ({infra.architecture.routerAgent?.targetLatency})</span></div>
+            <div className="flex justify-between"><span className="text-[var(--text-muted)]">LLM Primary</span><span className="font-mono">{infra.architecture.llmCascade?.primary}</span></div>
+            <div className="flex justify-between"><span className="text-[var(--text-muted)]">LLM Fallback</span><span className="font-mono">{infra.architecture.llmCascade?.fallback}</span></div>
+            <div className="flex justify-between"><span className="text-[var(--text-muted)]">DB Pooling</span><span className="font-mono">{infra.architecture.dbPooling?.mode} :{infra.architecture.dbPooling?.port}</span></div>
+            <div className="flex justify-between"><span className="text-[var(--text-muted)]">Cache</span><span className="font-mono">{infra.architecture.cachePolicy?.eviction} / {infra.architecture.cachePolicy?.maxMemory}</span></div>
+            <div className="flex justify-between"><span className="text-[var(--text-muted)]">Data Pruning</span><span className="font-mono">{infra.architecture.dataPruning?.schedule}</span></div>
+          </div>
         </div>
       )}
 
