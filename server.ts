@@ -152,6 +152,20 @@ app.prepare().then(() => {
     });
 
     // Allow clients to request refresh
+    
+    // BMC V2 Event Handlers
+    socket.on('agent:log', (data) => {
+      io.emit('agent_log', data);
+    });
+
+    socket.on('approval:response', (data) => {
+      io.emit('approval_update', data);
+    });
+
+    socket.on('task:update', (data) => {
+      io.emit('task_update', data);
+    });
+
     socket.on('refresh', async () => {
       const status = await fetchStatus();
       if (status) {
