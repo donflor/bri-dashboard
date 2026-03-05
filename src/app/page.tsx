@@ -24,6 +24,7 @@ import { AgentManagementPanel } from '@/components/AgentManagementPanel';
 import GlasshouseLayout from '@/components/btp/GlasshouseLayout';
 import EnvironmentToggle from '@/components/btp/EnvironmentToggle';
 import { EnvironmentProvider } from '@/contexts/EnvironmentContext';
+import { ProfitEngineWidget } from '@/components/dashboard/ProfitEngineWidget';
 import clsx from 'clsx';
 
 // ── Helpers ──────────────────────────────────────────────
@@ -442,6 +443,9 @@ export default function Dashboard() {
                   <Sparkline data={trendData.errors} width={80} height={24} color="#ef4444" />
                 </div>
               </div>
+
+              {/* Profit Engine */}
+              <ProfitEngineWidget />
 
               {/* Activity timeline chart (#5) */}
               <ActivityChart activities={state.recentActivity} hours={TIME_RANGE_HOURS[timeRange]} />
