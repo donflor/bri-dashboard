@@ -83,11 +83,8 @@ export function InfraMonitor() {
 
   const fetchMetrics = useCallback(async () => {
     try {
-      // Fetch from the droplet API server (proxied via /bmc/) since infra metrics need server-side exec
-      const apiBase = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-        ? `${window.location.protocol}//${window.location.hostname}:8080/bmc`
-        : '';
-      const res = await fetch(`${apiBase}/api/v2/infra-metrics`);
+      // Fetch from Next.js proxy route which calls the droplet API server
+      const res = await fetch('/api/v2/infra-metrics');
       if (res.ok) {
         const data = await res.json();
         setMetrics(data);
