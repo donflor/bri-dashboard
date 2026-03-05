@@ -81,7 +81,7 @@ export async function GET() {
     const { data: activityData, error: activityError } = await supabase
       .from('bmc_activity_log')
       .select('metadata, created_at')
-      .eq('action_type', 'profit_engine_sync')
+      .eq('action_type', 'profit_sync')
       .order('created_at', { ascending: false })
       .limit(1);
 
@@ -89,19 +89,64 @@ export async function GET() {
       return NextResponse.json(EMPTY_RESPONSE);
     }
 
-    const latest = activityData[0];
+    // Get latest entry for current metrics
+    const latestEntry = activityData[0];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const meta = latest.metadata as any;
+    const meta = latestEntry.metadata as any;
 
-    if (!meta || !meta.current) {
+    if (!meta) {
       return NextResponse.json(EMPTY_RESPONSE);
     }
 
+    // Build current metrics from the flat metadata structure
+    const current = {
+      mrr: Number(meta.stripe_mrr || 0),
+      totalBurn: Number(meta.total_api_burn || 0),
+      netMargin: Number(meta.net_margin || 0),
+      marginPercent: Number(meta.margin_percent || 0),
+      subscribers: Number(meta.stripe_subscribers || 0),
+    };
+
+    const breakdown = {
+      twilio: Number(meta.twilio_cost || 0),
+      elevenlabs: Number(meta.elevenlabs_cost || 0),
+      llm: Number(meta.llm_cost || 0),
+      infra: Number(meta.infra_cost || 0),
+    };
+
+    // Build trend from historical entries
+    const { data: trendData } = await supabase
+      .from('bmc_activity_log')
+      .select('metadata, created_at')
+      .eq('action_type', 'profit_sync')
+      .order('created_at', { ascending: true })
+      .limit(30);
+
+    const seen: Record<string, boolean> = {};
+    const trend = (trendData || [])
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .filter((e: any) => e.metadata)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((e: any) => {
+        const m = e.metadata;
+        const date = m.date || e.created_at?.split('T')[0];
+        return {
+          date,
+          revenue: Number(m.stripe_mrr || 0),
+          costs: Number(m.total_api_burn || 0),
+        };
+      })
+      .filter((t: { date: string }) => {
+        if (seen[t.date]) return false;
+        seen[t.date] = true;
+        return true;
+      });
+
     return NextResponse.json({
-      current: meta.current,
-      trend: meta.trend || [],
-      breakdown: meta.breakdown || { twilio: 0, elevenlabs: 0, llm: 0, infra: 0 },
-      lastUpdated: latest.created_at || new Date().toISOString(),
+      current,
+      trend,
+      breakdown,
+      lastUpdated: latestEntry.created_at || new Date().toISOString(),
     });
   } catch (err) {
     console.error('Profit engine API error:', err);
