@@ -11,6 +11,11 @@ import { ActivityChart } from '@/components/ActivityChart';
 import { ToastContainer, type ToastItem } from '@/components/Toast';
 import { BottomSheet } from '@/components/BottomSheet';
 import { EmptyState } from '@/components/EmptyState';
+import { TaskBoard } from '@/components/TaskBoard';
+import { ApprovalQueue } from '@/components/ApprovalQueue';
+import { AgentLogStream } from '@/components/AgentLogStream';
+import { ActivityTimeline } from '@/components/ActivityTimeline';
+import { Tabs } from '@/components/ui/Tabs';
 // Mock data removed — all data from real APIs
 import type { ActivityItem, SubAgent } from '@/types/dashboard';
 import { ObservabilityPanel } from '@/components/ObservabilityPanel';
@@ -58,7 +63,7 @@ function haptic(ms: number = 10) {
   if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(ms);
 }
 
-type TabType = 'status' | 'manage' | 'observe' | 'activity';
+type TabType = 'overview' | 'tasks' | 'approvals' | 'activity' | 'logs';
 type TimeRange = '1h' | '24h' | '7d' | '30d';
 type SheetData = { type: 'activity'; data: ActivityItem } | { type: 'agent'; data: SubAgent } | null;
 
@@ -75,7 +80,7 @@ export default function Dashboard() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
   const { state, connected, refresh } = useWebSocket();
-  const [activeTab, setActiveTab] = useState<TabType>('status');
+  const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
@@ -274,10 +279,25 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto pb-20">
+
+        <div className="max-w-4xl mx-auto p-4 pb-0">
+          <Tabs 
+            tabs={[
+              { id: 'overview', label: 'Overview', icon: '📊' },
+              { id: 'tasks', label: 'Tasks', icon: '📝' },
+              { id: 'approvals', label: 'Approvals', icon: '✅' },
+              { id: 'activity', label: 'Activity', icon: '📋' },
+              { id: 'logs', label: 'Agent Logs', icon: '📡' },
+            ]}
+            activeTab={activeTab}
+            onChange={(id) => switchTab(id as TabType)}
+          />
+        </div>
+
         <div className="max-w-4xl mx-auto p-4 space-y-4">
 
-          {/* ═══════════ STATUS TAB ═══════════ */}
-          {activeTab === 'status' && (
+          {/* ═══════════ OVERVIEW TAB ═══════════ */}
+          {activeTab === 'overview' && (
             <>
               {/* Time range selector (#2) */}
               <div className="flex gap-2">
@@ -470,135 +490,19 @@ export default function Dashboard() {
             />
           )}
 
-          {/* ═══════════ ACTIVITY TAB ═══════════ */}
-          {activeTab === 'activity' && (
-            <div className="space-y-3">
-              <h2 className="text-lg font-semibold text-[var(--text-secondary)] px-1">Activity Log</h2>
-
-              {/* Search & Filter (#8) */}
-              <div className="flex gap-2">
-                <div className="flex-1 relative">
-                  <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                  <input
-                    type="text"
-                    placeholder="Search activities..."
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
-                  />
-                </div>
-                <select
-                  value={typeFilter}
-                  onChange={e => setTypeFilter(e.target.value)}
-                  className="px-3 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] focus:outline-none"
-                >
-                  <option value="all">All</option>
-                  <option value="cron">Cron</option>
-                  <option value="message">Message</option>
-                  <option value="subagent">Subagent</option>
-                  <option value="task">Task</option>
-                  <option value="incoming">Incoming</option>
-                  <option value="system">System</option>
-                </select>
-              </div>
-
-              {/* Time range */}
-              <div className="flex gap-2">
-                {(['1h', '24h', '7d', '30d'] as TimeRange[]).map(r => (
-                  <button key={r} onClick={() => { setTimeRange(r); haptic(); }}
-                    className={clsx('px-3 py-1 rounded-lg text-xs font-medium transition-colors border',
-                      timeRange === r
-                        ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
-                        : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-color)]'
-                    )}>
-                    {r}
-                  </button>
-                ))}
-                <span className="ml-auto text-xs text-[var(--text-muted)] self-center">
-                  {filteredActivities.length} results
-                </span>
-              </div>
-
-              {filteredActivities.length === 0 ? (
-                <EmptyState icon="📋" title="No activity found"
-                  subtitle={searchQuery ? 'Try a different search term' : 'No activity in this time range'} />
-              ) : (
-                filteredActivities.map((activity) => (
-                  <div key={activity.id}
-                    className={clsx('bg-[var(--bg-card)] rounded-xl p-4 border cursor-pointer hover:bg-[var(--bg-card-hover)] transition-colors',
-                      activity.status === 'pending' || activity.status === 'in_progress' || activity.status === 'running'
-                        ? 'border-yellow-500/30'
-                        : activity.status === 'error'
-                          ? 'border-red-500/30'
-                          : 'border-[var(--border-color)]'
-                    )}
-                    onClick={() => { setSheetItem({ type: 'activity', data: activity }); haptic(); }}>
-                    <div className="flex items-start gap-3">
-                      <StatusBadge status={activity.status} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <span className={clsx('text-xs px-1.5 py-0.5 rounded',
-                            activity.type === 'cron' ? 'bg-purple-500/20 text-purple-400' :
-                            activity.type === 'message' ? 'bg-blue-500/20 text-blue-400' :
-                            activity.type === 'subagent' ? 'bg-cyan-500/20 text-cyan-400' :
-                            activity.type === 'incoming' ? 'bg-yellow-500/20 text-yellow-400' :
-                            'bg-gray-700 text-[var(--text-muted)]')}>
-                            {activity.type}
-                          </span>
-                          {activity.sourceDisplay && (
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700/50 text-[var(--text-secondary)]">
-                              {activity.sourceDisplay}
-                            </span>
-                          )}
-                          <span className={`text-xs ${getStatusColor(activity.status)}`}>{activity.status}</span>
-                        </div>
-                        <p className="text-sm">{activity.description}</p>
-                        <div className="flex items-center gap-2 mt-1 text-xs text-[var(--text-muted)] flex-wrap">
-                          <span>{format(new Date(activity.timestamp), 'HH:mm:ss')}</span>
-                          <span>•</span>
-                          <span>{formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}</span>
-                          {activity.duration && (
-                            <>
-                              <span>•</span>
-                              <span className="text-green-500">{(activity.duration / 1000).toFixed(1)}s</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </div>
+          
+          {/* ═══════════ NEW BMC V2 TABS ═══════════ */}
+          {activeTab === 'tasks' && <TaskBoard />}
+          {activeTab === 'approvals' && <ApprovalQueue />}
+          {activeTab === 'logs' && <AgentLogStream />}
+          
+          {/* ═══════════ ACTIVITY TIMELINE (V2) ═══════════ */}
+          {activeTab === 'activity' && <ActivityTimeline />}
+</div>
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-[var(--bg-overlay)] backdrop-blur border-t border-[var(--border-color)] px-4 py-2 safe-area-pb">
-        <div className="max-w-md mx-auto flex justify-around">
-          {([
-            { id: 'status' as TabType, icon: '📊', label: 'Status', badge: 0 },
-            { id: 'manage' as TabType, icon: '🤖', label: 'Manage', badge: state.stats.activeSubAgents + (state.cronJobs?.length || 0) },
-            { id: 'observe' as TabType, icon: '📈', label: 'Observe', badge: errorCount > 0 ? errorCount : 0 },
-            { id: 'activity' as TabType, icon: '📋', label: 'Activity', badge: 0 },
-          ]).map((tab) => (
-            <button key={tab.id} onClick={() => switchTab(tab.id)}
-              className={clsx('flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-colors relative',
-                activeTab === tab.id ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]')}>
-              <span className="text-xl">{tab.icon}</span>
-              <span className="text-xs font-medium">{tab.label}</span>
-              {tab.badge > 0 && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-[var(--accent)] rounded-full text-xs flex items-center justify-center text-white font-bold">
-                  {tab.badge}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      </nav>
+      
     </div>
   );
 }
