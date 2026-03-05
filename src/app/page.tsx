@@ -4,27 +4,25 @@ import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { formatDistanceToNow, format } from 'date-fns';
-import { ThemeToggle } from '@/components/ThemeToggle';
+import { formatDistanceToNow } from 'date-fns';
 import { Sparkline } from '@/components/Sparkline';
-import { ActivityChart } from '@/components/ActivityChart';
 import { ToastContainer, type ToastItem } from '@/components/Toast';
 import { BottomSheet } from '@/components/BottomSheet';
-import { EmptyState } from '@/components/EmptyState';
 import { TaskBoard } from '@/components/TaskBoard';
 import { ApprovalQueue } from '@/components/ApprovalQueue';
 import { AgentLogStream } from '@/components/AgentLogStream';
 import { ActivityTimeline } from '@/components/ActivityTimeline';
 import { InfraMonitor } from '@/components/InfraMonitor';
-import { Tabs } from '@/components/ui/Tabs';
-// Mock data removed — all data from real APIs
-import type { ActivityItem, SubAgent } from '@/types/dashboard';
-import { ObservabilityPanel } from '@/components/ObservabilityPanel';
 import { AgentManagementPanel } from '@/components/AgentManagementPanel';
+import { ObservabilityPanel } from '@/components/ObservabilityPanel';
 import GlasshouseLayout from '@/components/btp/GlasshouseLayout';
-import EnvironmentToggle from '@/components/btp/EnvironmentToggle';
-import { EnvironmentProvider } from '@/contexts/EnvironmentContext';
+import { EnvironmentProvider, useEnvironment } from '@/contexts/EnvironmentContext';
+import { Sidebar, type SidebarTab } from '@/components/Sidebar';
+import { InfraHeader } from '@/components/InfraHeader';
+import { ErrorRateChart } from '@/components/charts/ErrorRateChart';
+import { ActivityBarChart } from '@/components/charts/ActivityBarChart';
 import { ProfitEngineWidget } from '@/components/dashboard/ProfitEngineWidget';
+import type { ActivityItem, SubAgent } from '@/types/dashboard';
 import clsx from 'clsx';
 
 // ── Helpers ──────────────────────────────────────────────
@@ -41,13 +39,6 @@ function StatusBadge({ status, size = 'sm' }: { status: string; size?: 'sm' | 'l
   return <span className={`inline-block ${sizeClass} rounded-full ${colors[status] || 'bg-gray-400'}`} />;
 }
 
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-  return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
-}
-
 function getStatusColor(status: string): string {
   const colors: Record<string, string> = {
     completed: 'text-green-400', success: 'text-green-400', running: 'text-blue-400',
@@ -57,18 +48,10 @@ function getStatusColor(status: string): string {
   return colors[status] || 'text-[var(--text-muted)]';
 }
 
-function TrendArrow({ direction }: { direction: 'up' | 'down' | 'stable' }) {
-  if (direction === 'stable') return <span className="text-[var(--text-muted)] text-xs">→</span>;
-  return direction === 'up'
-    ? <span className="text-green-400 text-xs">↑</span>
-    : <span className="text-red-400 text-xs">↓</span>;
-}
-
 function haptic(ms: number = 10) {
   if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(ms);
 }
 
-type TabType = 'overview' | 'tasks' | 'approvals' | 'activity' | 'logs' | 'manage' | 'observe' | 'infra' | 'sandbox';
 type TimeRange = '1h' | '24h' | '7d' | '30d';
 type SheetData = { type: 'activity'; data: ActivityItem } | { type: 'agent'; data: SubAgent } | null;
 
@@ -79,16 +62,15 @@ const TIME_RANGE_HOURS: Record<TimeRange, number> = {
   '1h': 1, '24h': 24, '7d': 168, '30d': 720,
 };
 
-// ── Main Component ───────────────────────────────────────
+// ── Inner Dashboard (needs EnvironmentProvider context) ──
 
-export default function Dashboard() {
+function DashboardInner() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
   const { state, connected, refresh } = useWebSocket();
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const { isSandbox } = useEnvironment();
+  const [activeTab, setActiveTab] = useState<SidebarTab>('overview');
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState<string>('all');
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [sheetItem, setSheetItem] = useState<SheetData>(null);
   const prevActivityCountRef = useRef(0);
@@ -96,9 +78,9 @@ export default function Dashboard() {
   const [pullProgress, setPullProgress] = useState(0);
   const isAdmin = (session?.user as { role?: string })?.role === 'admin';
 
-  // Sparkline trend data — derived from real activity data (no mock)
+  // Sparkline trend data
   const trendData = useMemo(() => {
-    const trends = (state as any).trends;
+    const trends = (state as unknown as Record<string, unknown>).trends as Record<string, number[]> | undefined;
     const zeros = [0, 0, 0, 0, 0, 0, 0, 0];
     if (trends) {
       return {
@@ -113,13 +95,13 @@ export default function Dashboard() {
     return { tasks: zeros, cron: zeros, agents: zeros, response: zeros, completion: zeros, errors: zeros };
   }, [state]);
 
-  // ── Auth redirect ──
+  // Auth redirect
   useEffect(() => {
     if (authStatus === 'loading') return;
     if (!session) router.push('/login');
   }, [session, authStatus, router]);
 
-  // ── Toast on new activity (#12) ──
+  // Toast on new activity
   useEffect(() => {
     const count = state.recentActivity.length;
     if (prevActivityCountRef.current > 0 && count > prevActivityCountRef.current) {
@@ -135,12 +117,15 @@ export default function Dashboard() {
     prevActivityCountRef.current = count;
   }, [state.recentActivity]);
 
-  // ── Keyboard shortcuts (#10) ──
+  // Keyboard shortcuts — map 1-9 to sidebar tabs
   useEffect(() => {
+    const tabMap: Record<string, SidebarTab> = {
+      '1': 'overview', '2': 'profit', '3': 'approvals', '4': 'manage',
+      '5': 'tasks', '6': 'activity', '7': 'infra', '8': 'logs', '9': 'sandbox',
+    };
     const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
-      const tabs: Record<string, TabType> = { '1': 'overview', '2': 'tasks', '3': 'approvals', '4': 'activity', '5': 'logs', '6': 'infra' };
-      if (tabs[e.key]) { setActiveTab(tabs[e.key]); haptic(); }
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (tabMap[e.key]) { setActiveTab(tabMap[e.key]); haptic(); }
       if (e.key === 'r' || e.key === 'R') { e.preventDefault(); refresh(); haptic(); }
       if (e.key === 'Escape') setSheetItem(null);
     };
@@ -148,7 +133,7 @@ export default function Dashboard() {
     return () => window.removeEventListener('keydown', handler);
   }, [refresh]);
 
-  // ── Pull-to-refresh (#13) ──
+  // Pull-to-refresh
   useEffect(() => {
     const handleTouchStart = (e: TouchEvent) => { pullStartRef.current = e.touches[0].clientY; };
     const handleTouchMove = (e: TouchEvent) => {
@@ -171,25 +156,23 @@ export default function Dashboard() {
     };
   }, [pullProgress, refresh]);
 
-  // ── Filtered activities (#2, #8) ──
+  // Filtered activities for overview
   const filteredActivities = useMemo(() => {
     const cutoff = Date.now() - TIME_RANGE_MS[timeRange];
     return state.recentActivity.filter(a => {
       if (new Date(a.timestamp).getTime() < cutoff) return false;
-      if (typeFilter !== 'all' && a.type !== typeFilter) return false;
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        return a.description.toLowerCase().includes(q) ||
-               a.type.toLowerCase().includes(q) ||
-               (a.sourceDisplay || '').toLowerCase().includes(q);
-      }
       return true;
     });
-  }, [state.recentActivity, timeRange, typeFilter, searchQuery]);
+  }, [state.recentActivity, timeRange]);
 
-  // Error count
   const errorCount = useMemo(() =>
     state.recentActivity.filter(a => a.status === 'error').length,
+    [state.recentActivity]
+  );
+
+  // Pending approvals count (from recent activity with type pending)
+  const pendingApprovalsCount = useMemo(() =>
+    state.recentActivity.filter(a => a.status === 'pending').length,
     [state.recentActivity]
   );
 
@@ -197,7 +180,7 @@ export default function Dashboard() {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  const switchTab = useCallback((tab: TabType) => {
+  const switchTab = useCallback((tab: SidebarTab) => {
     setActiveTab(tab);
     haptic();
   }, []);
@@ -217,9 +200,11 @@ export default function Dashboard() {
   }
 
   return (
-    <EnvironmentProvider>
-    <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)] flex flex-col">
-      {/* Pull-to-refresh indicator (#13) */}
+    <div className={clsx(
+      'min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)] flex',
+      isSandbox && 'border-t-[3px] border-t-amber-500'
+    )}>
+      {/* Pull-to-refresh indicator */}
       {pullProgress > 0 && (
         <div className="fixed top-0 left-0 right-0 z-50 flex justify-center pt-2" style={{ opacity: pullProgress }}>
           <div className="w-8 h-8 rounded-full bg-[var(--accent)] flex items-center justify-center"
@@ -231,299 +216,224 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Toast notifications (#12) */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-
-      {/* Bottom sheet detail view (#15) */}
       <BottomSheet item={sheetItem} onClose={() => setSheetItem(null)} />
 
-      {/* Header */}
-      <header className="sticky top-0 z-40 bg-[var(--bg-overlay)] backdrop-blur border-b border-[var(--border-color)] px-4 py-3">
-        <div className="flex items-center justify-between max-w-4xl mx-auto">
-          <div className="flex items-center gap-3">
-            <span className="text-3xl">🦾</span>
-            <div>
-              <h1 className="text-lg font-bold">Bri Mission Control</h1>
-              <div className="flex items-center gap-2 text-xs">
-                <StatusBadge status={state.bri.status} />
-                <span className="text-[var(--text-secondary)] capitalize">{state.bri.status}</span>
-                {/* Auto-refresh / Live indicator (#9) */}
-                {connected && (
-                  <span className="flex items-center gap-1 text-green-500">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-live-pulse" />
-                    Live
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <EnvironmentToggle />
-            <ThemeToggle />
-            {isAdmin && (
-              <button onClick={() => router.push('/admin')}
-                className="p-2 rounded-xl bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] transition-colors border border-[var(--border-color)]" title="Admin">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-                </svg>
-              </button>
-            )}
-            <button onClick={() => { refresh(); haptic(); }}
-              className="p-2 rounded-xl bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] transition-colors border border-[var(--border-color)]" title="Refresh (R)">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </button>
-            <button onClick={() => signOut()}
-              className="p-2 rounded-xl bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] transition-colors border border-[var(--border-color)]" title="Sign out">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </header>
+      {/* Left Sidebar Navigation */}
+      <Sidebar
+        activeTab={activeTab}
+        onTabChange={switchTab}
+        userEmail={session.user?.email}
+        userName={session.user?.name}
+      />
 
-      {/* Main Content */}
-      <main className="flex-1 overflow-y-auto pb-20">
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-h-screen overflow-hidden">
+        {/* Compact Infrastructure Header */}
+        <InfraHeader
+          state={state}
+          connected={connected}
+          onRefresh={() => { refresh(); haptic(); }}
+          isAdmin={isAdmin}
+          onAdminClick={() => router.push('/admin')}
+        />
 
-        <div className="max-w-4xl mx-auto p-4 pb-0">
-          <Tabs 
-            tabs={[
-              { id: 'overview', label: 'Overview', icon: '📊' },
-              { id: 'tasks', label: 'Tasks', icon: '📝' },
-              { id: 'approvals', label: 'Approvals', icon: '✅' },
-              { id: 'activity', label: 'Activity', icon: '📋' },
-              { id: 'logs', label: 'Agent Logs', icon: '📡' },
-              { id: 'infra', label: 'Infra', icon: '🖥️' },
-              { id: 'manage', label: 'Agents', icon: '🤖' },
-              { id: 'observe', label: 'Observe', icon: '🔭' },
-              { id: 'sandbox', label: 'BTP Sandbox', icon: '🧪' },
-            ]}
-            activeTab={activeTab}
-            onChange={(id) => switchTab(id as TabType)}
-          />
-        </div>
+        {/* Tab Content */}
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-4">
 
-        <div className="max-w-4xl mx-auto p-4 space-y-4">
-
-          {/* ═══════════ OVERVIEW TAB ═══════════ */}
-          {activeTab === 'overview' && (
-            <>
-              {/* Time range selector (#2) */}
-              <div className="flex gap-2">
-                {(['1h', '24h', '7d', '30d'] as TimeRange[]).map(r => (
-                  <button key={r} onClick={() => { setTimeRange(r); haptic(); }}
-                    className={clsx('px-3 py-1.5 rounded-xl text-xs font-medium transition-colors border',
-                      timeRange === r
-                        ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
-                        : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'
-                    )}>
-                    {r}
-                  </button>
-                ))}
-              </div>
-
-              {/* System Health (#6) */}
-              <div className="bg-gradient-to-r from-[var(--bg-card)] to-[var(--bg-card-hover)] rounded-2xl p-4 border border-[var(--border-color)]">
+            {/* ═══════════ OVERVIEW (Executive Dashboard) ═══════════ */}
+            {activeTab === 'overview' && (
+              <>
+                {/* Time range selector */}
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={clsx('w-3 h-3 rounded-full', connected ? 'bg-green-500 animate-live-pulse' : 'bg-red-500')} />
-                    <div>
-                      <p className="text-sm font-semibold">{connected ? 'Connected' : 'Disconnected'}</p>
-                      <p className="text-xs text-[var(--text-muted)]">
-                        Last sync: {formatDistanceToNow(new Date(state.lastUpdated), { addSuffix: true })}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xs text-[var(--text-muted)]">Gateway</p>
-                    <p className="text-sm font-mono">{state.bri.model}</p>
+                  <h2 className="text-lg font-bold">Executive Overview</h2>
+                  <div className="flex gap-1.5">
+                    {(['1h', '24h', '7d', '30d'] as TimeRange[]).map(r => (
+                      <button key={r} onClick={() => { setTimeRange(r); haptic(); }}
+                        className={clsx('px-3 py-1 rounded-lg text-xs font-medium transition-colors border',
+                          timeRange === r
+                            ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
+                            : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border)] hover:bg-[var(--bg-hover)]'
+                        )}>
+                        {r}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              </div>
 
-              {/* Status Card */}
-              <div className="bg-gradient-to-br from-[var(--bg-card)] to-[var(--bg-card-hover)] rounded-3xl p-6 border border-[var(--border-color)]">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-4">
-                    <div className={clsx('w-16 h-16 rounded-2xl flex items-center justify-center text-3xl',
-                      state.bri.status === 'active' ? 'bg-green-500/20' :
-                      state.bri.status === 'thinking' ? 'bg-yellow-500/20' : 'bg-gray-700')}>
-                      🦾
-                    </div>
-                    <div>
-                      <h2 className="text-2xl font-bold capitalize">{state.bri.status}</h2>
-                      <p className="text-[var(--text-secondary)]">{state.bri.model}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-bold">{formatDuration(state.bri.uptime)}</p>
-                    <p className="text-[var(--text-secondary)] text-sm">Uptime</p>
-                  </div>
-                </div>
-                {state.bri.currentTask && (
-                  <div className="bg-[var(--bg-primary)]/50 rounded-2xl p-4">
-                    <p className="text-[var(--text-secondary)] text-sm mb-1">Current Task</p>
-                    <p>{state.bri.currentTask}</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Stats Grid with sparklines & trend arrows (#4) */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-2xl font-bold">{state.stats.totalTasks24h}</p>
-                    <TrendArrow direction="up" />
-                  </div>
-                  <Sparkline data={trendData.tasks} color="#3b82f6" />
-                  <p className="text-[var(--text-muted)] text-xs mt-1">Tasks ({timeRange})</p>
-                </div>
-                <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-2xl font-bold text-purple-400">{state.stats.activeCronJobs || 0}</p>
-                    <TrendArrow direction="stable" />
-                  </div>
-                  <Sparkline data={trendData.cron} color="#a855f7" />
-                  <p className="text-[var(--text-muted)] text-xs mt-1">Cron Active</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-[var(--bg-card)] rounded-2xl p-4 text-center border border-[var(--border-color)]">
-                  <div className="flex items-center justify-center gap-1 mb-1">
-                    <p className="text-2xl font-bold text-blue-400">{state.stats.activeSubAgents}</p>
-                    <TrendArrow direction="up" />
-                  </div>
-                  <Sparkline data={trendData.agents} color="#3b82f6" />
-                  <p className="text-[var(--text-muted)] text-xs mt-1">Sub-Agents</p>
-                </div>
-                <div className="bg-[var(--bg-card)] rounded-2xl p-4 text-center border border-[var(--border-color)]">
-                  <div className="flex items-center justify-center gap-1 mb-1">
-                    <p className="text-2xl font-bold text-green-400">
-                      {state.stats.avgResponseTime > 0 ? `${(state.stats.avgResponseTime / 1000).toFixed(1)}s` : '-'}
-                    </p>
-                    <TrendArrow direction="down" />
-                  </div>
-                  <Sparkline data={trendData.response} color="#22c55e" />
-                  <p className="text-[var(--text-muted)] text-xs mt-1">Avg Response</p>
-                </div>
-                <div className="bg-[var(--bg-card)] rounded-2xl p-4 text-center border border-[var(--border-color)]">
-                  <div className="flex items-center justify-center gap-1 mb-1">
-                    <p className="text-2xl font-bold text-yellow-400">
-                      {state.stats.avgCompletionTime && state.stats.avgCompletionTime > 0
-                        ? `${(state.stats.avgCompletionTime / 1000).toFixed(1)}s` : '-'}
-                    </p>
-                    <TrendArrow direction="stable" />
-                  </div>
-                  <Sparkline data={trendData.completion} color="#eab308" />
-                  <p className="text-[var(--text-muted)] text-xs mt-1">Avg Complete</p>
-                </div>
-              </div>
-
-              {/* Error rate tracking (#7) */}
-              <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center',
-                      errorCount > 5 ? 'bg-red-500/20' : errorCount > 0 ? 'bg-yellow-500/20' : 'bg-green-500/20')}>
-                      {errorCount > 5 ? '🔴' : errorCount > 0 ? '🟡' : '🟢'}
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold">Error Rate</p>
-                      <p className="text-xs text-[var(--text-muted)]">
-                        {errorCount} errors in {state.recentActivity.length} activities
-                        ({state.recentActivity.length > 0
-                          ? ((errorCount / state.recentActivity.length) * 100).toFixed(1)
-                          : 0}%)
-                      </p>
-                    </div>
-                  </div>
-                  <Sparkline data={trendData.errors} width={80} height={24} color="#ef4444" />
-                </div>
-              </div>
-
-              {/* Profit Engine */}
-              <ProfitEngineWidget />
-
-              {/* Activity timeline chart (#5) */}
-              <ActivityChart activities={state.recentActivity} hours={TIME_RANGE_HOURS[timeRange]} />
-
-              {/* Quick Activity Preview */}
-              <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
-                <h3 className="text-sm font-semibold text-[var(--text-secondary)] mb-3">Recent Activity</h3>
-                <div className="space-y-2">
-                  {filteredActivities.length === 0 ? (
-                    <p className="text-[var(--text-muted)] text-sm text-center py-4">No activity in this time range</p>
-                  ) : (
-                    filteredActivities.slice(0, 5).map((activity) => (
-                      <div key={activity.id} className="flex items-start gap-3 text-sm cursor-pointer hover:bg-[var(--bg-card-hover)] rounded-lg p-1 -mx-1"
-                           onClick={() => { setSheetItem({ type: 'activity', data: activity }); haptic(); }}>
-                        <StatusBadge status={activity.status} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <p className={`truncate flex-1 ${getStatusColor(activity.status)}`}>{activity.description}</p>
-                            {activity.sourceDisplay && (
-                              <span className="text-xs text-[var(--text-muted)] whitespace-nowrap">{activity.sourceDisplay}</span>
-                            )}
-                          </div>
-                          <p className="text-[var(--text-muted)] text-xs">
-                            {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
-                            {activity.duration && ` • ${(activity.duration / 1000).toFixed(1)}s`}
-                          </p>
+                {/* Row 1: 3-column executive KPIs */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* Active Agent Count */}
+                  <div className="bg-[var(--bg-card)] rounded-2xl p-5 border border-[var(--border)]">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="relative">
+                        <div className={clsx(
+                          'w-14 h-14 rounded-full flex items-center justify-center text-2xl font-bold',
+                          state.stats.activeSubAgents > 0 ? 'bg-blue-500/15 text-blue-400' : 'bg-[var(--bg-hover)] text-[var(--text-muted)]'
+                        )}>
+                          {state.stats.activeSubAgents}
                         </div>
+                        {state.stats.activeSubAgents > 0 && (
+                          <div className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full animate-live-pulse" />
+                        )}
                       </div>
-                    ))
-                  )}
+                      <div>
+                        <p className="text-sm font-semibold">Active Agents</p>
+                        <p className="text-xs text-[var(--text-muted)]">Sub-agents running now</p>
+                      </div>
+                    </div>
+                    <Sparkline data={trendData.agents} color="#3b82f6" />
+                  </div>
+
+                  {/* Profit Metrics Placeholder */}
+                  <div className="bg-[var(--bg-card)] rounded-2xl p-5 border border-[var(--border)]">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-14 h-14 rounded-full flex items-center justify-center text-2xl bg-green-500/15">
+                        💰
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold">Profit Metrics</p>
+                        <p className="text-xs text-[var(--text-muted)]">MRR vs API Burn</p>
+                      </div>
+                    </div>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-lg font-bold text-green-400">$0</span>
+                      <span className="text-xs text-[var(--text-muted)]">MRR</span>
+                      <span className="text-[var(--text-muted)]">/</span>
+                      <span className="text-lg font-bold text-red-400">$0</span>
+                      <span className="text-xs text-[var(--text-muted)]">burn</span>
+                    </div>
+                  </div>
+
+                  {/* Pending Approvals */}
+                  <button
+                    onClick={() => switchTab('approvals')}
+                    className="bg-[var(--bg-card)] rounded-2xl p-5 border border-[var(--border)] text-left hover:border-[var(--accent)] transition-colors"
+                  >
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className={clsx(
+                        'w-14 h-14 rounded-full flex items-center justify-center text-2xl',
+                        pendingApprovalsCount > 0 ? 'bg-yellow-500/15' : 'bg-[var(--bg-hover)]'
+                      )}>
+                        {pendingApprovalsCount > 0 ? '⚠️' : '✅'}
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold">Pending Approvals</p>
+                        <p className="text-xs text-[var(--text-muted)]">Requires attention</p>
+                      </div>
+                    </div>
+                    <div className="flex items-baseline gap-2">
+                      <span className={clsx('text-2xl font-bold',
+                        pendingApprovalsCount > 0 ? 'text-yellow-400' : 'text-green-400'
+                      )}>
+                        {pendingApprovalsCount}
+                      </span>
+                      <span className="text-xs text-[var(--text-muted)]">
+                        {pendingApprovalsCount > 0 ? 'need review →' : 'all clear'}
+                      </span>
+                    </div>
+                  </button>
                 </div>
-              </div>
-            </>
-          )}
 
-          {/* ═══════════ AGENT MANAGEMENT TAB ═══════════ */}
-          {activeTab === 'manage' && (
-            <AgentManagementPanel
-              subAgents={state.subAgents}
-              cronJobs={state.cronJobs}
-              recentActivity={state.recentActivity}
-              onSelectAgent={(agent) => { setSheetItem({ type: 'agent', data: agent }); haptic(); }}
-              onSelectActivity={(activity) => { setSheetItem({ type: 'activity', data: activity }); haptic(); }}
-            />
-          )}
+                {/* Row 2: Error Rate + Activity Charts (Recharts) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <ErrorRateChart activities={state.recentActivity} hours={TIME_RANGE_HOURS[timeRange]} />
+                  <ActivityBarChart activities={state.recentActivity} hours={TIME_RANGE_HOURS[timeRange]} />
+                </div>
 
-          {/* ═══════════ OBSERVABILITY TAB ═══════════ */}
-          {activeTab === 'observe' && (
-            <ObservabilityPanel
-              errorRate={state.recentActivity.length > 0
-                ? (errorCount / state.recentActivity.length) * 100 : 0}
-              totalActivities={state.recentActivity.length}
-              avgResponseTime={state.stats.avgResponseTime}
-              avgCompletionTime={state.stats.avgCompletionTime}
-              cronJobs={state.cronJobs}
-            />
-          )}
+                {/* Row 3: Recent Activity (limited to 5) */}
+                <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border)]">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-[var(--text-secondary)]">Recent Activity</h3>
+                    <button onClick={() => switchTab('activity')}
+                      className="text-xs text-[var(--accent)] hover:underline">
+                      View all →
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {filteredActivities.length === 0 ? (
+                      <p className="text-[var(--text-muted)] text-sm text-center py-4">No activity in this time range</p>
+                    ) : (
+                      filteredActivities.slice(0, 5).map((activity) => (
+                        <div key={activity.id}
+                          className="flex items-start gap-3 text-sm cursor-pointer hover:bg-[var(--bg-hover)] rounded-lg p-1.5 -mx-1"
+                          onClick={() => { setSheetItem({ type: 'activity', data: activity }); haptic(); }}>
+                          <StatusBadge status={activity.status} />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className={`truncate flex-1 ${getStatusColor(activity.status)}`}>{activity.description}</p>
+                              {activity.sourceDisplay && (
+                                <span className="text-xs text-[var(--text-muted)] whitespace-nowrap">{activity.sourceDisplay}</span>
+                              )}
+                            </div>
+                            <p className="text-[var(--text-muted)] text-xs">
+                              {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
+                              {activity.duration && ` • ${(activity.duration / 1000).toFixed(1)}s`}
+                            </p>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
 
-          
-          {/* ═══════════ NEW BMC V2 TABS ═══════════ */}
-          {activeTab === 'tasks' && <TaskBoard />}
-          {activeTab === 'approvals' && <ApprovalQueue />}
-          {activeTab === 'logs' && <AgentLogStream />}
-          
-          {/* ═══════════ ACTIVITY TIMELINE (V2) ═══════════ */}
-          {activeTab === 'activity' && <ActivityTimeline />}
+                {/* Observability metrics merged from old Observe tab */}
+                <ObservabilityPanel
+                  errorRate={state.recentActivity.length > 0
+                    ? (errorCount / state.recentActivity.length) * 100 : 0}
+                  totalActivities={state.recentActivity.length}
+                  avgResponseTime={state.stats.avgResponseTime}
+                  avgCompletionTime={state.stats.avgCompletionTime}
+                  cronJobs={state.cronJobs}
+                />
+              </>
+            )}
 
-          {/* ═══════════ INFRASTRUCTURE MONITOR ═══════════ */}
-          {activeTab === 'infra' && <InfraMonitor />}
+            {/* ═══════════ PROFIT ENGINE ═══════════ */}
+            {activeTab === 'profit' && <ProfitEngineWidget />}
 
-          {/* ═══════════ BTP SANDBOX (GLASSHOUSE) ═══════════ */}
-          {activeTab === 'sandbox' && <GlasshouseLayout />}
-</div>
-      </main>
+            {/* ═══════════ APPROVALS ═══════════ */}
+            {activeTab === 'approvals' && <ApprovalQueue />}
 
-      {/* Bottom Navigation */}
-      
+            {/* ═══════════ AGENT FLEET (was "manage") ═══════════ */}
+            {activeTab === 'manage' && (
+              <AgentManagementPanel
+                subAgents={state.subAgents}
+                cronJobs={state.cronJobs}
+                recentActivity={state.recentActivity}
+                onSelectAgent={(agent) => { setSheetItem({ type: 'agent', data: agent }); haptic(); }}
+                onSelectActivity={(activity) => { setSheetItem({ type: 'activity', data: activity }); haptic(); }}
+              />
+            )}
+
+            {/* ═══════════ TASKS ═══════════ */}
+            {activeTab === 'tasks' && <TaskBoard />}
+
+            {/* ═══════════ ACTIVITY ═══════════ */}
+            {activeTab === 'activity' && <ActivityTimeline />}
+
+            {/* ═══════════ INFRA ═══════════ */}
+            {activeTab === 'infra' && <InfraMonitor />}
+
+            {/* ═══════════ LOGS ═══════════ */}
+            {activeTab === 'logs' && <AgentLogStream />}
+
+            {/* ═══════════ BTP SANDBOX ═══════════ */}
+            {activeTab === 'sandbox' && <GlasshouseLayout />}
+          </div>
+        </main>
+      </div>
     </div>
+  );
+}
+
+// ── Main Export with Provider wrapper ──
+
+export default function Dashboard() {
+  return (
+    <EnvironmentProvider>
+      <DashboardInner />
     </EnvironmentProvider>
   );
 }
