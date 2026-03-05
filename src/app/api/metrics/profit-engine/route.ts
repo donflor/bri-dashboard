@@ -41,48 +41,70 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    // Primary: Try dedicated profit_engine_metrics table
     const { data, error } = await supabase
       .from('profit_engine_metrics')
       .select('*')
       .order('date', { ascending: false })
       .limit(30);
 
-    if (error || !data || data.length === 0) {
+    if (!error && data && data.length > 0) {
+      const rows = data as ProfitEngineRow[];
+      const latest = rows[0];
+
+      const trend = [...rows].reverse().map((row) => ({
+        date: row.date,
+        revenue: Number(row.stripe_mrr),
+        costs: Number(row.total_api_burn),
+      }));
+
+      return NextResponse.json({
+        current: {
+          mrr: Number(latest.stripe_mrr),
+          totalBurn: Number(latest.total_api_burn),
+          netMargin: Number(latest.net_margin),
+          marginPercent: Number(latest.margin_percent),
+          subscribers: Number(latest.stripe_subscribers),
+        },
+        trend,
+        breakdown: {
+          twilio: Number(latest.twilio_cost),
+          elevenlabs: Number(latest.elevenlabs_cost),
+          llm: Number(latest.llm_cost),
+          infra: Number(latest.infra_cost),
+        },
+        lastUpdated: latest.created_at || new Date().toISOString(),
+      });
+    }
+
+    // Fallback: Read from bmc_activity_log (always exists)
+    const { data: activityData, error: activityError } = await supabase
+      .from('bmc_activity_log')
+      .select('metadata, created_at')
+      .eq('action_type', 'profit_engine_sync')
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (activityError || !activityData || activityData.length === 0) {
       return NextResponse.json(EMPTY_RESPONSE);
     }
 
-    const rows = data as ProfitEngineRow[];
-    const latest = rows[0];
+    const latest = activityData[0];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const meta = latest.metadata as any;
 
-    // Trend: reverse to chronological order (oldest first)
-    const trend = [...rows].reverse().map((row) => ({
-      date: row.date,
-      revenue: Number(row.stripe_mrr),
-      costs: Number(row.total_api_burn),
-    }));
+    if (!meta || !meta.current) {
+      return NextResponse.json(EMPTY_RESPONSE);
+    }
 
-    const response = {
-      current: {
-        mrr: Number(latest.stripe_mrr),
-        totalBurn: Number(latest.total_api_burn),
-        netMargin: Number(latest.net_margin),
-        marginPercent: Number(latest.margin_percent),
-        subscribers: Number(latest.stripe_subscribers),
-      },
-      trend,
-      breakdown: {
-        twilio: Number(latest.twilio_cost),
-        elevenlabs: Number(latest.elevenlabs_cost),
-        llm: Number(latest.llm_cost),
-        infra: Number(latest.infra_cost),
-      },
+    return NextResponse.json({
+      current: meta.current,
+      trend: meta.trend || [],
+      breakdown: meta.breakdown || { twilio: 0, elevenlabs: 0, llm: 0, infra: 0 },
       lastUpdated: latest.created_at || new Date().toISOString(),
-    };
-
-    return NextResponse.json(response);
+    });
   } catch (err) {
     console.error('Profit engine API error:', err);
     return NextResponse.json(EMPTY_RESPONSE);
   }
 }
- 
