@@ -15,6 +15,7 @@ import { TaskBoard } from '@/components/TaskBoard';
 import { ApprovalQueue } from '@/components/ApprovalQueue';
 import { AgentLogStream } from '@/components/AgentLogStream';
 import { ActivityTimeline } from '@/components/ActivityTimeline';
+import { InfraMonitor } from '@/components/InfraMonitor';
 import { Tabs } from '@/components/ui/Tabs';
 // Mock data removed — all data from real APIs
 import type { ActivityItem, SubAgent } from '@/types/dashboard';
@@ -63,7 +64,7 @@ function haptic(ms: number = 10) {
   if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(ms);
 }
 
-type TabType = 'overview' | 'tasks' | 'approvals' | 'activity' | 'logs' | 'manage' | 'observe';
+type TabType = 'overview' | 'tasks' | 'approvals' | 'activity' | 'logs' | 'manage' | 'observe' | 'infra';
 type TimeRange = '1h' | '24h' | '7d' | '30d';
 type SheetData = { type: 'activity'; data: ActivityItem } | { type: 'agent'; data: SubAgent } | null;
 
@@ -134,7 +135,7 @@ export default function Dashboard() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
-      const tabs: Record<string, TabType> = { '1': 'overview', '2': 'tasks', '3': 'approvals', '4': 'activity', '5': 'logs' };
+      const tabs: Record<string, TabType> = { '1': 'overview', '2': 'tasks', '3': 'approvals', '4': 'activity', '5': 'logs', '6': 'infra' };
       if (tabs[e.key]) { setActiveTab(tabs[e.key]); haptic(); }
       if (e.key === 'r' || e.key === 'R') { e.preventDefault(); refresh(); haptic(); }
       if (e.key === 'Escape') setSheetItem(null);
@@ -288,6 +289,7 @@ export default function Dashboard() {
               { id: 'approvals', label: 'Approvals', icon: '✅' },
               { id: 'activity', label: 'Activity', icon: '📋' },
               { id: 'logs', label: 'Agent Logs', icon: '📡' },
+              { id: 'infra', label: 'Infra', icon: '🖥️' },
               { id: 'manage', label: 'Agents', icon: '🤖' },
               { id: 'observe', label: 'Observe', icon: '🔭' },
             ]}
@@ -500,6 +502,9 @@ export default function Dashboard() {
           
           {/* ═══════════ ACTIVITY TIMELINE (V2) ═══════════ */}
           {activeTab === 'activity' && <ActivityTimeline />}
+
+          {/* ═══════════ INFRASTRUCTURE MONITOR ═══════════ */}
+          {activeTab === 'infra' && <InfraMonitor />}
 </div>
       </main>
 
