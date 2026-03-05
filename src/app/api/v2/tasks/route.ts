@@ -23,6 +23,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Title is required' }, { status: 400 });
   }
 
+  // Input length limits
+  if (title.length > 500) {
+    return NextResponse.json({ error: 'Title too long (max 500 chars)' }, { status: 400 });
+  }
+  if (description && description.length > 5000) {
+    return NextResponse.json({ error: 'Description too long (max 5000 chars)' }, { status: 400 });
+  }
+
   // Get max position for the target column
   const { data: maxPos } = await supabase
     .from('bmc_tasks')

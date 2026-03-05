@@ -23,6 +23,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
   }
 
+  // Input length limits
+  if (action_description.length > 5000) {
+    return NextResponse.json({ error: 'Description too long (max 5000 chars)' }, { status: 400 });
+  }
+  if (requesting_agent.length > 100) {
+    return NextResponse.json({ error: 'Agent name too long' }, { status: 400 });
+  }
+
   const { data, error } = await supabase
     .from('bmc_approvals')
     .insert({
