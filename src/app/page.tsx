@@ -21,6 +21,9 @@ import { Tabs } from '@/components/ui/Tabs';
 import type { ActivityItem, SubAgent } from '@/types/dashboard';
 import { ObservabilityPanel } from '@/components/ObservabilityPanel';
 import { AgentManagementPanel } from '@/components/AgentManagementPanel';
+import GlasshouseLayout from '@/components/btp/GlasshouseLayout';
+import EnvironmentToggle from '@/components/btp/EnvironmentToggle';
+import { EnvironmentProvider } from '@/contexts/EnvironmentContext';
 import clsx from 'clsx';
 
 // ── Helpers ──────────────────────────────────────────────
@@ -64,7 +67,7 @@ function haptic(ms: number = 10) {
   if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(ms);
 }
 
-type TabType = 'overview' | 'tasks' | 'approvals' | 'activity' | 'logs' | 'manage' | 'observe' | 'infra';
+type TabType = 'overview' | 'tasks' | 'approvals' | 'activity' | 'logs' | 'manage' | 'observe' | 'infra' | 'sandbox';
 type TimeRange = '1h' | '24h' | '7d' | '30d';
 type SheetData = { type: 'activity'; data: ActivityItem } | { type: 'agent'; data: SubAgent } | null;
 
@@ -213,6 +216,7 @@ export default function Dashboard() {
   }
 
   return (
+    <EnvironmentProvider>
     <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)] flex flex-col">
       {/* Pull-to-refresh indicator (#13) */}
       {pullProgress > 0 && (
@@ -253,6 +257,7 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <EnvironmentToggle />
             <ThemeToggle />
             {isAdmin && (
               <button onClick={() => router.push('/admin')}
@@ -292,6 +297,7 @@ export default function Dashboard() {
               { id: 'infra', label: 'Infra', icon: '🖥️' },
               { id: 'manage', label: 'Agents', icon: '🤖' },
               { id: 'observe', label: 'Observe', icon: '🔭' },
+              { id: 'sandbox', label: 'BTP Sandbox', icon: '🧪' },
             ]}
             activeTab={activeTab}
             onChange={(id) => switchTab(id as TabType)}
@@ -505,11 +511,15 @@ export default function Dashboard() {
 
           {/* ═══════════ INFRASTRUCTURE MONITOR ═══════════ */}
           {activeTab === 'infra' && <InfraMonitor />}
+
+          {/* ═══════════ BTP SANDBOX (GLASSHOUSE) ═══════════ */}
+          {activeTab === 'sandbox' && <GlasshouseLayout />}
 </div>
       </main>
 
       {/* Bottom Navigation */}
       
     </div>
+    </EnvironmentProvider>
   );
 }
