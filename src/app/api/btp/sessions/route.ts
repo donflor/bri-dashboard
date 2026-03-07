@@ -1,11 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/rbac';
-import { createBtpSession, getBtpSessions } from '@/lib/btp-supabase';
+import { createBtpSession, getBtpSessions, getBtpSessionById } from '@/lib/btp-supabase';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const { authorized, response } = await requireAdmin();
     if (!authorized) return response!;
+
+    const sessionId = req.nextUrl.searchParams.get('id');
+
+    if (sessionId) {
+      const session = await getBtpSessionById(sessionId);
+      if (!session) {
+        return NextResponse.json({ success: false, error: 'Session not found' }, { status: 404 });
+      }
+      return NextResponse.json({ success: true, data: session });
+    }
 
     const sessions = await getBtpSessions();
     return NextResponse.json({ success: true, data: sessions });

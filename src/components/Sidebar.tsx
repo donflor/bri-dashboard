@@ -42,7 +42,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { id: 'infra', label: 'Infra', icon: '🖥️' },
       { id: 'logs', label: 'Logs', icon: '📡' },
-      { id: 'sandbox', label: 'BTP Sandbox', icon: '🧪' },
+      { id: 'sandbox', label: 'BMC Testing', icon: '🧪' },
     ],
   },
 ];

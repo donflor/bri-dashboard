@@ -153,3 +153,20 @@ export async function getBtpCallLogs(testAccountId?: string, limit = 50): Promis
   if (error) throw new Error(`Failed to fetch BTP call logs: ${error.message}`);
   return (data || []) as BtpCallLog[];
 }
+
+// ── Single Session Lookup ─────────────────────────────────
+
+export async function getBtpSessionById(sessionId: string): Promise<BtpSession | null> {
+  const client = getBtpClient();
+  const { data, error } = await client
+    .from('btp_sessions')
+    .select('*')
+    .eq('id', sessionId)
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') return null; // not found
+    throw new Error(`Failed to fetch BTP session: ${error.message}`);
+  }
+  return data as BtpSession;
+}

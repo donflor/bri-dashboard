@@ -34,7 +34,7 @@ export default function EmailFeedPanel({ testAccountId }: Props) {
 
   useEffect(() => {
     fetchEmails();
-    const interval = setInterval(fetchEmails, 10000);
+    const interval = setInterval(fetchEmails, 3000);
     return () => clearInterval(interval);
   }, [fetchEmails]);
 

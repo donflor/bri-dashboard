@@ -20,7 +20,7 @@ export default function GlasshouseLayout() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <span className="inline-block h-3 w-3 rounded-full bg-amber-400 animate-pulse" />
-            <h2 className="text-lg font-bold text-white">Glasshouse Testing Interface</h2>
+            <h2 className="text-lg font-bold text-white">BMC Testing Interface</h2>
           </div>
           <span className="text-xs text-amber-400/70 bg-amber-950/30 border border-amber-800/30 rounded-full px-3 py-1">
             SANDBOX MODE
