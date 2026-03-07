@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 // Cache
 let cachedData: DashboardState | null = null;
 let cacheTime = 0;
-const CACHE_TTL = 30_000; // 30s
+const CACHE_TTL = 5_000; // 30s
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';

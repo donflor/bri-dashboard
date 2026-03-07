@@ -63,6 +63,17 @@ function TrendArrow({ direction }: { direction: 'up' | 'down' | 'stable' }) {
     : <span className="text-red-400 text-xs">↓</span>;
 }
 
+
+function calculateTrend(data: number[]): 'up' | 'down' | 'stable' {
+  if (data.length < 4) return 'stable';
+  const mid = Math.floor(data.length / 2);
+  const first = data.slice(0, mid).reduce((a, b) => a + b, 0) / mid;
+  const second = data.slice(mid).reduce((a, b) => a + b, 0) / (data.length - mid);
+  if (second > first * 1.05) return 'up';
+  if (second < first * 0.95) return 'down';
+  return 'stable';
+}
+
 function haptic(ms: number = 10) {
   if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(ms);
 }
@@ -79,6 +90,60 @@ const TIME_RANGE_HOURS: Record<TimeRange, number> = {
 };
 
 // ── Main Component ───────────────────────────────────────
+
+
+function LiveIndicators({ state, connected }: { state: any; connected: boolean }) {
+  const [liveData, setLiveData] = useState<{
+    activeSessions: number;
+    crmLeads24h: number;
+    apiBurnRate: string;
+    uptime: string;
+  }>({
+    activeSessions: 0,
+    crmLeads24h: 0,
+    apiBurnRate: '$0.00',
+    uptime: '—',
+  });
+
+  useEffect(() => {
+    const activeSessions = state.subAgents?.filter((a: any) => a.status === 'running').length || 0;
+    const crmLeads24h = state.stats?.totalTasks24h || 0;
+    const uptimeSeconds = state.bri?.uptime || 0;
+    const days = Math.floor(uptimeSeconds / 86400);
+    const hours = Math.floor((uptimeSeconds % 86400) / 3600);
+    const uptimeStr = days > 0 ? `${days}d ${hours}h` : `${hours}h`;
+
+    // Estimate API burn from token usage / cost if available
+    const cost = state.stats?.estimatedCost;
+    const burnStr = cost != null ? `$${cost.toFixed(2)}` : '—';
+
+    setLiveData({
+      activeSessions,
+      crmLeads24h,
+      apiBurnRate: burnStr,
+      uptime: uptimeStr,
+    });
+  }, [state]);
+
+  const indicators = [
+    { label: 'Active Sessions', value: String(liveData.activeSessions), icon: '⚡', color: 'text-blue-400' },
+    { label: 'CRM Leads (24h)', value: String(liveData.crmLeads24h), icon: '📈', color: 'text-green-400' },
+    { label: 'API Burn Rate', value: liveData.apiBurnRate, icon: '🔥', color: 'text-orange-400' },
+    { label: 'Uptime', value: liveData.uptime, icon: '🟢', color: 'text-emerald-400' },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {indicators.map((ind) => (
+        <div key={ind.label} className="bg-[var(--bg-card)] rounded-2xl p-3 border border-[var(--border-color)] text-center">
+          <div className="text-lg mb-1">{ind.icon}</div>
+          <div className={`text-xl font-bold ${ind.color}`}>{ind.value}</div>
+          <div className="text-[10px] text-[var(--text-muted)] mt-0.5">{ind.label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const { data: session, status: authStatus } = useSession();
@@ -342,6 +407,9 @@ export default function Dashboard() {
                 </div>
               </div>
 
+              {/* Live Indicator Counts */}
+              <LiveIndicators state={state} connected={connected} />
+
               {/* Status Card */}
               <div className="bg-gradient-to-br from-[var(--bg-card)] to-[var(--bg-card-hover)] rounded-3xl p-6 border border-[var(--border-color)]">
                 <div className="flex items-center justify-between mb-6">
@@ -374,7 +442,7 @@ export default function Dashboard() {
                 <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-2xl font-bold">{state.stats.totalTasks24h}</p>
-                    <TrendArrow direction="up" />
+                    <TrendArrow direction={calculateTrend(trendData.tasks)} />
                   </div>
                   <Sparkline data={trendData.tasks} color="#3b82f6" />
                   <p className="text-[var(--text-muted)] text-xs mt-1">Tasks ({timeRange})</p>
@@ -382,7 +450,7 @@ export default function Dashboard() {
                 <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-2xl font-bold text-purple-400">{state.stats.activeCronJobs || 0}</p>
-                    <TrendArrow direction="stable" />
+                    <TrendArrow direction={calculateTrend(trendData.cron)} />
                   </div>
                   <Sparkline data={trendData.cron} color="#a855f7" />
                   <p className="text-[var(--text-muted)] text-xs mt-1">Cron Active</p>
@@ -393,7 +461,7 @@ export default function Dashboard() {
                 <div className="bg-[var(--bg-card)] rounded-2xl p-4 text-center border border-[var(--border-color)]">
                   <div className="flex items-center justify-center gap-1 mb-1">
                     <p className="text-2xl font-bold text-blue-400">{state.stats.activeSubAgents}</p>
-                    <TrendArrow direction="up" />
+                    <TrendArrow direction={calculateTrend(trendData.agents)} />
                   </div>
                   <Sparkline data={trendData.agents} color="#3b82f6" />
                   <p className="text-[var(--text-muted)] text-xs mt-1">Sub-Agents</p>
@@ -403,7 +471,7 @@ export default function Dashboard() {
                     <p className="text-2xl font-bold text-green-400">
                       {state.stats.avgResponseTime > 0 ? `${(state.stats.avgResponseTime / 1000).toFixed(1)}s` : '-'}
                     </p>
-                    <TrendArrow direction="down" />
+                    <TrendArrow direction={calculateTrend(trendData.response)} />
                   </div>
                   <Sparkline data={trendData.response} color="#22c55e" />
                   <p className="text-[var(--text-muted)] text-xs mt-1">Avg Response</p>
@@ -414,7 +482,7 @@ export default function Dashboard() {
                       {state.stats.avgCompletionTime && state.stats.avgCompletionTime > 0
                         ? `${(state.stats.avgCompletionTime / 1000).toFixed(1)}s` : '-'}
                     </p>
-                    <TrendArrow direction="stable" />
+                    <TrendArrow direction={calculateTrend(trendData.completion)} />
                   </div>
                   <Sparkline data={trendData.completion} color="#eab308" />
                   <p className="text-[var(--text-muted)] text-xs mt-1">Avg Complete</p>

@@ -6,7 +6,7 @@ import type { DashboardState } from '@/types/dashboard';
 const INITIAL_STATE: DashboardState = {
   bri: {
     status: 'offline',
-    model: 'claude-opus-4-5',
+    model: 'claude-opus-4-6',
     sessionKey: 'main',
     uptime: 0,
     lastActivity: new Date().toISOString(),
