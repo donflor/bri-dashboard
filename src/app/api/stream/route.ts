@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import type { DashboardState } from '@/types/dashboard';
+import { supabase } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,11 +78,27 @@ async function fetchStatus(): Promise<DashboardState | null> {
   return null;
 }
 
+async function fetchNewActivityEntries(since: string): Promise<any[]> {
+  try {
+    const { data } = await supabase
+      .from('bmc_activity_log')
+      .select('id, agent_id, action_type, description, metadata, created_at, source_type, source_channel, source_user, request_id, response_time_ms, severity')
+      .gt('created_at', since)
+      .order('created_at', { ascending: true })
+      .limit(20);
+    return data || [];
+  } catch {
+    return [];
+  }
+}
+
 export async function GET(request: NextRequest) {
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
     async start(controller) {
+      let lastActivityTimestamp = new Date().toISOString();
+
       // Send initial state
       const status = await fetchStatus();
       if (status) {
@@ -94,6 +111,15 @@ export async function GET(request: NextRequest) {
           const status = await fetchStatus();
           if (status) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(status)}\n\n`));
+          }
+
+          // Emit new activity_log entries as named events
+          const newEntries = await fetchNewActivityEntries(lastActivityTimestamp);
+          for (const entry of newEntries) {
+            controller.enqueue(
+              encoder.encode(`event: activity_log\ndata: ${JSON.stringify(entry)}\n\n`)
+            );
+            lastActivityTimestamp = entry.created_at;
           }
         } catch (e) {
           console.error('Stream error:', e);

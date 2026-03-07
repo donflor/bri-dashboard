@@ -419,7 +419,7 @@ function DashboardInner() {
             {/* ═══════════ LOGS ═══════════ */}
             {activeTab === 'logs' && <AgentLogStream />}
 
-            {/* ═══════════ BTP SANDBOX ═══════════ */}
+            {/* ═══════════ BMC TESTING ═══════════ */}
             {activeTab === 'sandbox' && <GlasshouseLayout />}
           </div>
         </main>

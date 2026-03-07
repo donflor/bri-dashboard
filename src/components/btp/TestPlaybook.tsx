@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { BtpScenario, BtpSessionStatus } from '@/types/btp';
 
 interface Props {
@@ -39,6 +39,51 @@ export default function TestPlaybook({ testAccountId, onSessionCreated }: Props)
   const [statuses, setStatuses] = useState<Record<string, BtpSessionStatus | 'idle'>>(
     Object.fromEntries(SCENARIOS.map(s => [s.id, 'idle']))
   );
+  const pollTimers = useRef<Record<string, ReturnType<typeof setInterval>>>({});
+
+  // Cleanup all poll timers on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(pollTimers.current).forEach(clearInterval);
+    };
+  }, []);
+
+  const pollSession = useCallback((scenario: BtpScenario, sessionId: string) => {
+    // Clear any existing poll for this scenario
+    if (pollTimers.current[scenario]) {
+      clearInterval(pollTimers.current[scenario]);
+    }
+
+    pollTimers.current[scenario] = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/btp/sessions?id=${sessionId}`, {
+          headers: { 'X-BTP-Mode': 'sandbox' },
+        });
+        if (!res.ok) return;
+
+        const json = await res.json();
+        const session = json.data;
+        if (!session) return;
+
+        const status = session.status as BtpSessionStatus;
+
+        setStatuses(prev => ({ ...prev, [scenario]: status }));
+
+        // Stop polling on terminal states
+        if (status === 'success' || status === 'failed' || status === 'cancelled') {
+          clearInterval(pollTimers.current[scenario]);
+          delete pollTimers.current[scenario];
+
+          // Reset to idle after 5s
+          setTimeout(() => {
+            setStatuses(prev => ({ ...prev, [scenario]: 'idle' }));
+          }, 5000);
+        }
+      } catch {
+        // Silently continue polling on network errors
+      }
+    }, 2000);
+  }, []);
 
   const triggerScenario = useCallback(async (scenario: BtpScenario) => {
     if (statuses[scenario] === 'running' || statuses[scenario] === 'pending') return;
@@ -54,15 +99,12 @@ export default function TestPlaybook({ testAccountId, onSessionCreated }: Props)
 
       const data = await res.json();
 
-      if (res.ok && data.success) {
+      if (res.ok && data.success && data.sessionId) {
         setStatuses(prev => ({ ...prev, [scenario]: 'running' }));
-        if (data.sessionId) onSessionCreated?.(data.sessionId);
+        onSessionCreated?.(data.sessionId);
 
-        // Auto-transition to success after 10s (simulated; real impl would use WebSocket)
-        setTimeout(() => {
-          setStatuses(prev => ({ ...prev, [scenario]: 'success' }));
-          setTimeout(() => setStatuses(prev => ({ ...prev, [scenario]: 'idle' })), 5000);
-        }, 10000);
+        // Start polling for real status updates from Supabase
+        pollSession(scenario, data.sessionId);
       } else {
         setStatuses(prev => ({ ...prev, [scenario]: 'failed' }));
         setTimeout(() => setStatuses(prev => ({ ...prev, [scenario]: 'idle' })), 5000);
@@ -71,7 +113,7 @@ export default function TestPlaybook({ testAccountId, onSessionCreated }: Props)
       setStatuses(prev => ({ ...prev, [scenario]: 'failed' }));
       setTimeout(() => setStatuses(prev => ({ ...prev, [scenario]: 'idle' })), 5000);
     }
-  }, [testAccountId, statuses, onSessionCreated]);
+  }, [testAccountId, statuses, onSessionCreated, pollSession]);
 
   return (
     <div className="rounded-xl bg-gray-900/80 border border-gray-800 p-4">
