@@ -15,6 +15,7 @@ import { generateTrendData } from '@/lib/mockData';
 import type { ActivityItem, SubAgent } from '@/types/dashboard';
 import { ObservabilityPanel } from '@/components/ObservabilityPanel';
 import { AgentManagementPanel } from '@/components/AgentManagementPanel';
+import { LeadGenerationPanel } from '@/components/LeadGenerationPanel';
 import clsx from 'clsx';
 
 // ── Helpers ──────────────────────────────────────────────
@@ -58,7 +59,7 @@ function haptic(ms: number = 10) {
   if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(ms);
 }
 
-type TabType = 'status' | 'manage' | 'observe' | 'activity';
+type TabType = 'status' | 'manage' | 'observe' | 'activity' | 'leads';
 type TimeRange = '1h' | '24h' | '7d' | '30d';
 type SheetData = { type: 'activity'; data: ActivityItem } | { type: 'agent'; data: SubAgent } | null;
 
@@ -135,7 +136,7 @@ export default function Dashboard() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
-      const tabs: Record<string, TabType> = { '1': 'status', '2': 'manage', '3': 'observe', '4': 'activity' };
+      const tabs: Record<string, TabType> = { '1': 'status', '2': 'manage', '3': 'observe', '4': 'activity', '5': 'leads' };
       if (tabs[e.key]) { setActiveTab(tabs[e.key]); haptic(); }
       if (e.key === 'r' || e.key === 'R') { e.preventDefault(); refresh(); haptic(); }
       if (e.key === 'Escape') setSheetItem(null);
@@ -579,6 +580,7 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+          {activeTab === 'leads' && <LeadGenerationPanel />}
       </main>
 
       {/* Bottom Navigation */}
@@ -589,6 +591,7 @@ export default function Dashboard() {
             { id: 'manage' as TabType, icon: '🤖', label: 'Manage', badge: state.stats.activeSubAgents + (state.cronJobs?.length || 0) },
             { id: 'observe' as TabType, icon: '📈', label: 'Observe', badge: errorCount > 0 ? errorCount : 0 },
             { id: 'activity' as TabType, icon: '📋', label: 'Activity', badge: 0 },
+            { id: 'leads' as TabType, icon: '🎯', label: 'Leads', badge: 0 },
           ]).map((tab) => (
             <button key={tab.id} onClick={() => switchTab(tab.id)}
               className={clsx('flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-colors relative',
